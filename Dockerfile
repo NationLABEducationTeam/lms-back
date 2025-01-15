@@ -1,17 +1,17 @@
-# Base image
-FROM node:16
+# Use Node.js LTS version
+FROM node:18-alpine
 
-# Set working directory
+# Create app directory
 WORKDIR /usr/src/app
 
-# Copy package files and install dependencies
+# Install app dependencies
 COPY package*.json ./
-RUN npm install
+RUN npm ci --only=production
 
-# Copy application code
+# Bundle app source
 COPY . .
 
-# Expose application port
+# Expose port
 EXPOSE 3000
 
 # Start the application

@@ -1,0 +1,35 @@
+{
+    "family": "lms-ecs-task",
+    "networkMode": "awsvpc",
+    "requiresCompatibilities": ["FARGATE"],
+    "cpu": "256",
+    "memory": "512",
+    "executionRoleArn": "arn:aws:iam::471112588210:role/ecsTaskExecutionRole",
+    "containerDefinitions": [
+        {
+            "name": "lms-ecs",
+            "image": "471112588210.dkr.ecr.ap-northeast-2.amazonaws.com/lms-ecs:latest",
+            "portMappings": [
+                {
+                    "containerPort": 3000,
+                    "protocol": "tcp"
+                }
+            ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/lms-ecs",
+                    "awslogs-region": "ap-northeast-2",
+                    "awslogs-stream-prefix": "ecs"
+                }
+            },
+            "healthCheck": {
+                "command": ["CMD-SHELL", "curl -f http://localhost:3000/health || exit 1"],
+                "interval": 30,
+                "timeout": 5,
+                "retries": 3
+            },
+            "essential": true
+        }
+    ]
+} 

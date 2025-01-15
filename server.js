@@ -20,7 +20,7 @@ app.get('/health', (req, res) => {
 
 // Hello World endpoint
 app.get('/', (req, res) => {
-    res.json({ message: 'Hello World! This is running on ECS + Fargate.' });
+    res.json({ message: 'Hello World!!!!! This is running on ECS + Fargate.' });
 });
 
 // Routes will be mounted here

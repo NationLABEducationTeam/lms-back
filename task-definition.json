@@ -9,27 +9,26 @@
         {
             "name": "lms-ecs",
             "image": "471112588210.dkr.ecr.ap-northeast-2.amazonaws.com/lms-ecs:latest",
+            "cpu": 0,
             "portMappings": [
                 {
                     "containerPort": 3000,
+                    "hostPort": 3000,
                     "protocol": "tcp"
                 }
             ],
+            "essential": true,
+            "environment": [],
+            "mountPoints": [],
+            "volumesFrom": [],
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
-                    "awslogs-group": "/ecs/lms-ecs",
+                    "awslogs-group": "/ecs/lms-ecs-task",
                     "awslogs-region": "ap-northeast-2",
                     "awslogs-stream-prefix": "ecs"
                 }
-            },
-            "healthCheck": {
-                "command": ["CMD-SHELL", "curl -f http://localhost:3000/health || exit 1"],
-                "interval": 30,
-                "timeout": 5,
-                "retries": 3
-            },
-            "essential": true
+            }
         }
     ]
 } 

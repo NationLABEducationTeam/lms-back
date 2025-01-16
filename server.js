@@ -13,14 +13,28 @@ app.use(cors());
 app.use(express.json());
 app.use(morgan('dev'));
 
+// CORS 설정
+app.use(cors());
+
+// 로깅 미들웨어
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'healthy' });
+  console.log('Health check requested');
+  res.json({ status: 'healthy' });
 });
 
 // Hello World endpoint
 app.get('/', (req, res) => {
-    res.json({ message: 'Hello World!!!!! This is running on ECS + Fargate.' });
+  console.log('Root endpoint accessed - Hello World request received');
+  res.json({ 
+    message: 'NationsLAB가 첫 배포 됐습니다. 많은 관심 주셔서 감사합니다.',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Routes will be mounted here

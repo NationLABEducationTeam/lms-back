@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ECS Fargate Test</title>
+    <script>
+        async function testEndpoint() {
+            try {
+                const response = await fetch('http://lms-alb-599601140.ap-northeast-2.elb.amazonaws.com/');
+                const data = await response.json();
+                console.log('Response from server:', data);
+                document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('result').textContent = 'Error: ' + error.message;
+            }
+        }
+    </script>
+</head>
+<body>
+    <h1>ECS Fargate Test</h1>
+    <button onclick="testEndpoint()">Test Endpoint</button>
+    <pre id="result"></pre>
+</body>
+</html> 

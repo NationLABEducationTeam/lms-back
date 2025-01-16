@@ -1,8 +1,8 @@
 # Use Node.js LTS version
 FROM node:18-alpine
 
-# Install curl for healthcheck
-RUN apk add --no-cache curl
+# Install wget for healthcheck
+RUN apk add --no-cache wget
 
 # Create app directory
 WORKDIR /usr/src/app

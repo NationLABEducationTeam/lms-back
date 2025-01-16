@@ -10,6 +10,7 @@
         {
             "name": "lms-ecs",
             "image": "471112588210.dkr.ecr.ap-northeast-2.amazonaws.com/lms-ecs:latest",
+            "cpu": 0,
             "portMappings": [
                 {
                     "containerPort": 3000,
@@ -17,28 +18,11 @@
                     "protocol": "tcp"
                 }
             ],
+            "essential": true,
             "environment": [
                 {
                     "name": "NODE_ENV",
                     "value": "production"
-                }
-            ],
-            "secrets": [
-                {
-                    "name": "AWS_ACCESS_KEY_ID",
-                    "valueFrom": "arn:aws:ssm:ap-northeast-2:471112588210:parameter/lms/AWS_ACCESS_KEY_ID"
-                },
-                {
-                    "name": "AWS_SECRET_ACCESS_KEY",
-                    "valueFrom": "arn:aws:ssm:ap-northeast-2:471112588210:parameter/lms/AWS_SECRET_ACCESS_KEY"
-                },
-                {
-                    "name": "COGNITO_USER_POOL_ID",
-                    "valueFrom": "arn:aws:ssm:ap-northeast-2:471112588210:parameter/lms/COGNITO_USER_POOL_ID"
-                },
-                {
-                    "name": "COGNITO_CLIENT_ID",
-                    "valueFrom": "arn:aws:ssm:ap-northeast-2:471112588210:parameter/lms/COGNITO_CLIENT_ID"
                 }
             ],
             "logConfiguration": {
@@ -55,8 +39,7 @@
                 "timeout": 5,
                 "retries": 3,
                 "startPeriod": 60
-            },
-            "essential": true
+            }
         }
     ]
 } 

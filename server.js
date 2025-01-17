@@ -7,6 +7,13 @@ const dynamodb = require('./src/config/dynamodb');
 // Load environment variables
 dotenv.config();
 
+// Check if AWS credentials are loaded
+console.log('Checking AWS credentials at server start:', {
+    AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID ? 'Set' : 'Not set',
+    AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY ? 'Set' : 'Not set',
+    AWS_REGION: process.env.AWS_REGION
+});
+
 const app = express();
 
 // Middleware

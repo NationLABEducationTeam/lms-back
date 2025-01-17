@@ -7,15 +7,22 @@
     "dev": "nodemon server.js",
     "test": "jest"
   },
-  "keywords": ["lms", "express", "aws"],
+  "keywords": [
+    "lms",
+    "express",
+    "aws"
+  ],
   "author": "",
   "license": "ISC",
   "description": "LMS Backend using Express.js and AWS Services",
   "dependencies": {
-    "express": "^4.21.2",
+    "@aws-sdk/client-dynamodb": "^3.730.0",
+    "@aws-sdk/credential-providers": "^3.730.0",
+    "@aws-sdk/lib-dynamodb": "^3.730.0",
     "aws-sdk": "^2.1550.0",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "jwks-rsa": "^3.1.0",
     "morgan": "^1.10.0",

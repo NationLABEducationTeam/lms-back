@@ -1,28 +1,52 @@
-// TODO: Implement real database connection using VPC
-// const mysql = require('mysql2/promise');
-// const dotenv = require('dotenv');
-// 
-// dotenv.config();
-// 
-// const pool = mysql.createPool({
-//     host: process.env.DB_HOST,
-//     user: process.env.DB_USER,
-//     password: process.env.DB_PASSWORD,
-//     database: process.env.DB_NAME,
-//     waitForConnections: true,
-//     connectionLimit: 10,
-//     queueLimit: 0
-// });
+const { Pool } = require('pg');
+const dotenv = require('dotenv');
 
-// Temporary mock query function
-const mockPool = {
-    query: async (sql, params) => {
-        console.log('Mock SQL:', sql);
-        console.log('Mock params:', params);
+dotenv.config();
 
-        // Return empty arrays as mock data
-        return [[], []];
+console.log('Initializing database connection with config:', {
+    host: process.env.DB_HOST || 'lmsrds.cjik2cuykhtl.ap-northeast-2.rds.amazonaws.com',
+    port: process.env.DB_PORT || 5432,
+    database: 'postgres',  // Let's try connecting to the default database first
+    user: process.env.DB_USER || 'postgres',
+    // password hidden
+});
+
+const pool = new Pool({
+    host: process.env.DB_HOST || 'lmsrds.cjik2cuykhtl.ap-northeast-2.rds.amazonaws.com',
+    port: process.env.DB_PORT || 5432,
+    database: 'postgres',  // Changed to default postgres database
+    user: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD,
+    ssl: {
+        rejectUnauthorized: false
+    }
+});
+
+// Test the connection
+pool.on('connect', () => {
+    console.log('Connected to PostgreSQL database');
+});
+
+pool.on('error', (err) => {
+    console.error('Database connection error:', err);
+    console.error('Error code:', err.code);
+    console.error('Error message:', err.message);
+    console.error('Error stack:', err.stack);
+});
+
+// Export an async function to test the connection
+const testConnection = async () => {
+    try {
+        const client = await pool.connect();
+        console.log('Successfully acquired client');
+        const result = await client.query('SELECT current_database() as db_name');
+        console.log('Current database:', result.rows[0].db_name);
+        client.release();
+        return true;
+    } catch (err) {
+        console.error('Test connection failed:', err);
+        return false;
     }
 };
 
-module.exports = mockPool; 
+module.exports = { pool, testConnection }; 

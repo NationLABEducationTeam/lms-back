@@ -2,8 +2,39 @@ const express = require('express');
 const router = express.Router();
 const { verifyToken, requireRole } = require('../middlewares/auth');
 const dynamodb = require('../config/dynamodb');
+const { pool, testConnection } = require('../config/database');
 
 const TABLE_NAME = 'nationslab-courses';
+
+// Test database connection
+router.get('/test-db', async (req, res) => {
+    console.log('Attempting to test database connection...');
+    try {
+        const isConnected = await testConnection();
+        if (isConnected) {
+            res.json({
+                message: 'Database connection successful',
+                connected: true
+            });
+        } else {
+            res.status(500).json({
+                message: 'Database connection failed',
+                connected: false
+            });
+        }
+    } catch (error) {
+        console.error('Database connection test failed:');
+        console.error('Error name:', error.name);
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({
+            message: 'Database connection failed',
+            error: error.message,
+            errorName: error.name,
+            connected: false
+        });
+    }
+});
 
 // Public routes
 router.get('/public', async (req, res) => {

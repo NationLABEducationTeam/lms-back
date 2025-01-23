@@ -26,6 +26,7 @@ const coursesRouter = require('./src/routes/courses');
 const studentsRouter = require('./src/routes/students');
 const aiRouter = require('./src/routes/ai');
 const usersRouter = require('./src/routes/users');
+const enrollmentsRouter = require('./src/routes/enrollments');
 
 // API 버전 prefix
 const API_PREFIX = '/api/v1';
@@ -95,6 +96,7 @@ app.use(`${API_PREFIX}/courses`, coursesRouter);
 app.use(`${API_PREFIX}/students`, studentsRouter);
 app.use(`${API_PREFIX}/ai`, aiRouter);
 app.use(`${API_PREFIX}/users`, usersRouter);
+app.use(`${API_PREFIX}/enrollments`, enrollmentsRouter);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

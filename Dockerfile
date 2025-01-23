@@ -1,8 +1,8 @@
 # Use Node.js LTS version
 FROM node:18-alpine
 
-# Install wget for healthcheck
-RUN apk add --no-cache wget
+# Install wget for healthcheck and postgresql-client for database operations
+RUN apk add --no-cache wget postgresql-client
 
 # Create app directory
 WORKDIR /usr/src/app

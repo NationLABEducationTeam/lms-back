@@ -25,6 +25,7 @@ app.use(morgan('dev'));
 const coursesRouter = require('./src/routes/courses');
 const studentsRouter = require('./src/routes/students');
 const aiRouter = require('./src/routes/ai');
+const usersRouter = require('./src/routes/users');
 
 // API 버전 prefix
 const API_PREFIX = '/api/v1';
@@ -93,6 +94,7 @@ app.get('/', async (req, res) => {
 app.use(`${API_PREFIX}/courses`, coursesRouter);
 app.use(`${API_PREFIX}/students`, studentsRouter);
 app.use(`${API_PREFIX}/ai`, aiRouter);
+app.use(`${API_PREFIX}/users`, usersRouter);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

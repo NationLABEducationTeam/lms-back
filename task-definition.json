@@ -23,6 +23,30 @@
                 {
                     "name": "NODE_ENV",
                     "value": "production"
+                },
+                {
+                    "name": "DB_HOST",
+                    "value": "lmsrds.cjik2cuykhtl.ap-northeast-2.rds.amazonaws.com"
+                },
+                {
+                    "name": "DB_PORT",
+                    "value": "5432"
+                },
+                {
+                    "name": "DB_NAME",
+                    "value": "postgres"
+                },
+                {
+                    "name": "DB_USER",
+                    "value": "postgres"
+                },
+                {
+                    "name": "DB_PASSWORD",
+                    "value": "161718Kiwi!"
+                },
+                {
+                    "name": "COGNITO_JWKS_URL",
+                    "value": "https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_RWIv2Yp2f/.well-known/jwks.json"
                 }
             ],
             "logConfiguration": {

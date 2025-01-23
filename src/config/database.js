@@ -3,13 +3,53 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
+// Database schemas
+const SCHEMAS = {
+    AUTH: 'auth_schema',
+    COMMUNICATION: 'communication_schema',
+    COURSE: 'course_schema',
+    ENROLLMENT: 'enrollment_schema',
+    LEARNING: 'learning_schema'
+};
+
+// Tables in each schema
+const TABLES = {
+    AUTH: {
+        USERS: 'users',
+        USER_PROFILES: 'user_profiles',
+        REFRESH_TOKENS: 'refresh_tokens'
+    },
+    COMMUNICATION: {
+        COMMENTS: 'comments',
+        BOARD_TYPES: 'board_types',
+        POSTS: 'posts',
+        ATTACHMENTS: 'attachments'
+    },
+    COURSE: {
+        MAIN_CATEGORIES: 'main_categories',
+        SUB_CATEGORIES: 'sub_categories',
+        COURSES: 'courses',
+        COURSE_WEEKS: 'course_weeks',
+        COURSE_MATERIALS: 'course_materials'
+    },
+    ENROLLMENT: {
+        ENROLLMENTS: 'enrollments',
+        PROGRESS_TRACKING: 'progress_tracking'
+    },
+    LEARNING: {
+        ATTENDANCE: 'attendance',
+        ASSIGNMENTS: 'assignments',
+        ASSIGNMENT_SUBMISSION: 'assignment_submission'
+    }
+};
+
 // Add password check (without revealing the actual password)
 const dbPassword = process.env.DB_PASSWORD ? String(process.env.DB_PASSWORD) : 'your_password_here';
 console.log('DB_PASSWORD environment variable is', process.env.DB_PASSWORD ? 'set' : 'not set');
 console.log('Initializing database connection with config:', {
     host: process.env.DB_HOST || 'lmsrds.cjik2cuykhtl.ap-northeast-2.rds.amazonaws.com',
     port: process.env.DB_PORT || 5432,
-    database: 'postgres',  // Let's try connecting to the default database first
+    database: 'postgres',
     user: process.env.DB_USER || 'postgres',
     // password hidden for security
 });
@@ -17,9 +57,9 @@ console.log('Initializing database connection with config:', {
 const pool = new Pool({
     host: process.env.DB_HOST || 'lmsrds.cjik2cuykhtl.ap-northeast-2.rds.amazonaws.com',
     port: process.env.DB_PORT || 5432,
-    database: 'postgres',  // Changed to default postgres database
+    database: 'postgres',
     user: process.env.DB_USER || 'postgres',
-    password: dbPassword,  // Use the explicitly converted string password
+    password: dbPassword,
     ssl: {
         rejectUnauthorized: false
     }
@@ -53,4 +93,4 @@ const testConnection = async () => {
     }
 };
 
-module.exports = { pool, testConnection }; 
+module.exports = { pool, testConnection, SCHEMAS, TABLES }; 

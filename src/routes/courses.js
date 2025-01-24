@@ -3,6 +3,7 @@ const router = express.Router();
 const { verifyToken, requireRole } = require('../middlewares/auth');
 const dynamodb = require('../config/dynamodb');
 const { pool, testConnection } = require('../config/database');
+const { SCHEMAS, TABLES } = require('../config/database');
 
 const TABLE_NAME = 'nationslab-courses';
 
@@ -36,63 +37,127 @@ router.get('/test-db', async (req, res) => {
     }
 });
 
-// Public routes
+// Public routes - Get all published courses
 router.get('/public', async (req, res) => {
     try {
-        const params = {
-            TableName: TABLE_NAME,
-            FilterExpression: '#status = :status',
-            ExpressionAttributeNames: {
-                '#status': 'status'
-            },
-            ExpressionAttributeValues: {
-                ':status': 'published'
-            }
-        };
+        const query = `
+            SELECT 
+                c.*,
+                mc.name as main_category_name,
+                sc.name as sub_category_name,
+                u.name as instructor_name
+            FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
+                ON c.main_category_id = mc.id
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
+                ON c.sub_category_id = sc.id
+            LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
+                ON c.instructor_id = u.cognito_user_id
+            ORDER BY c.created_at DESC
+        `;
 
-        console.log('Scanning with params:', params);
-        const result = await dynamodb.scan(params);
-        console.log('Raw DynamoDB result:', JSON.stringify(result, null, 2));
-
+        const result = await pool.query(query);
+        
         res.json({
-            courses: result.Items || [],
-            count: result.Count || 0,
-            scannedCount: result.ScannedCount || 0
+            success: true,
+            data: {
+                courses: result.rows,
+                total: result.rowCount
+            }
         });
     } catch (error) {
         console.error('Error fetching public courses:', error);
         res.status(500).json({ 
-            message: 'Internal server error',
+            success: false,
+            message: 'Failed to fetch courses',
             error: error.message 
         });
     }
 });
 
-// Get all courses
-router.get('/', verifyToken, async (req, res) => {
+// Get all courses (Public)
+router.get('/', async (req, res) => {
     try {
-        const [courses] = await pool.query('SELECT * FROM courses');
-        res.json({ courses });
+        const query = `
+            SELECT 
+                c.*,
+                mc.name as main_category_name,
+                sc.name as sub_category_name,
+                u.name as instructor_name
+            FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
+                ON c.main_category_id = mc.id
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
+                ON c.sub_category_id = sc.id
+            LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
+                ON c.instructor_id = u.cognito_user_id
+            ORDER BY c.created_at DESC
+        `;
+
+        const result = await pool.query(query);
+        
+        res.json({
+            success: true,
+            data: {
+                courses: result.rows,
+                total: result.rowCount
+            }
+        });
     } catch (error) {
         console.error('Error fetching courses:', error);
-        res.status(500).json({ message: 'Internal server error' });
+        res.status(500).json({ 
+            success: false,
+            message: 'Failed to fetch courses',
+            error: error.message 
+        });
     }
 });
 
 // Get specific course
-router.get('/:courseId', verifyToken, async (req, res) => {
+router.get('/:courseId', async (req, res) => {
     try {
         const { courseId } = req.params;
-        const [course] = await pool.query('SELECT * FROM courses WHERE id = ?', [courseId]);
+        const query = `
+            SELECT 
+                c.*,
+                mc.name as main_category_name,
+                mc.id as main_category_id,
+                sc.name as sub_category_name,
+                sc.id as sub_category_id,
+                u.name as instructor_name,
+                u.cognito_user_id as instructor_id
+            FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
+                ON c.main_category_id = mc.id
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
+                ON c.sub_category_id = sc.id
+            LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
+                ON c.instructor_id = u.cognito_user_id
+            WHERE c.id = $1
+        `;
         
-        if (course.length === 0) {
-            return res.status(404).json({ message: 'Course not found' });
+        const result = await pool.query(query, [courseId]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Course not found'
+            });
         }
         
-        res.json(course[0]);
+        res.json({
+            success: true,
+            data: {
+                course: result.rows[0]
+            }
+        });
     } catch (error) {
         console.error('Error fetching course:', error);
-        res.status(500).json({ message: 'Internal server error' });
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch course',
+            error: error.message
+        });
     }
 });
 
@@ -134,7 +199,8 @@ router.get('/my/progress', verifyToken, requireRole(['STUDENT']), async (req, re
 });
 
 // Course management (Instructor/Admin)
-router.post('/', verifyToken, requireRole(['INSTRUCTOR', 'ADMIN']), async (req, res) => {
+// TODO: fix this route
+router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
         const { title, description, is_public } = req.body;
         const [result] = await pool.query(

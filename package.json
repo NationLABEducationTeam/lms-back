@@ -20,6 +20,7 @@
     "@aws-sdk/credential-providers": "^3.730.0",
     "@aws-sdk/lib-dynamodb": "^3.730.0",
     "aws-sdk": "^2.1550.0",
+    "chalk": "^4.1.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

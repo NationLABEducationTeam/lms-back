@@ -23,7 +23,9 @@ const corsOptions = {
     },
     production: {
         origin: [
-            "*"
+            'http://nationslab-lms.s3-website.ap-northeast-2.amazonaws.com',
+            'http://localhost:3001',
+            'http://localhost:5173'
         ],
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],

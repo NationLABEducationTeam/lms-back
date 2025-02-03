@@ -1,5 +1,4 @@
 const express = require('express');
-const cors = require('cors');
 const morgan = require('morgan');
 const dotenv = require('dotenv');
 const dynamodb = require('./src/config/dynamodb');
@@ -14,12 +13,10 @@ console.log('Checking AWS credentials at server start:', {
     AWS_REGION: process.env.AWS_REGION
 });
 
-const app = express();
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(morgan('dev'));
+// Import middlewares
+const { corsMiddleware, securityHeaders } = require('./src/middlewares/cors');
+const { requestLogger, performanceMonitor } = require('./src/middlewares/logger');
+const { errorHandler, notFound } = require('./src/middlewares/error');
 
 // Import routes
 const coursesRouter = require('./src/routes/courses');
@@ -28,12 +25,32 @@ const aiRouter = require('./src/routes/ai');
 const usersRouter = require('./src/routes/users');
 const enrollmentsRouter = require('./src/routes/enrollments');
 
-// API 버전 prefix
+const app = express();
+
+// API version prefix
 const API_PREFIX = '/api/v1';
+
+/**
+ * 🔧 Middleware Stack
+ * Order is important!
+ */
+
+// 1. Basic middlewares
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// 2. Security middlewares
+app.use(corsMiddleware);
+app.use(securityHeaders);
+
+// 3. Logging middlewares
+app.use(morgan('dev'));
+app.use(requestLogger);
+app.use(performanceMonitor);
 
 // Health check endpoint (no prefix)
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy' });
+    res.json({ status: 'healthy' });
 });
 
 const TABLE_NAME = 'nationslab-courses';
@@ -98,14 +115,14 @@ app.use(`${API_PREFIX}/ai`, aiRouter);
 app.use(`${API_PREFIX}/users`, usersRouter);
 app.use(`${API_PREFIX}/enrollments`, enrollmentsRouter);
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Global error handler:', err.stack);
-  res.status(500).json({ message: 'Something broke!' });
-});
+// Handle 404 errors
+app.use(notFound);
+
+// Global error handler - should be last
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log(`🚀 Server is running on port ${PORT}`);
 });

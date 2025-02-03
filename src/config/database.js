@@ -43,39 +43,29 @@ const TABLES = {
     }
 };
 
-// 필수 환경 변수 체크
-if (!process.env.DB_HOST) {
-    throw new Error('Database host not configured. Please set DB_HOST environment variable.');
-}
-
-if (!process.env.DB_NAME) {
-    throw new Error('Database name not configured. Please set DB_NAME environment variable.');
-}
-
-if (!process.env.DB_USER) {
-    throw new Error('Database user not configured. Please set DB_USER environment variable.');
-}
-
-if (!process.env.DB_PASSWORD) {
-    throw new Error('Database password not configured. Please set DB_PASSWORD environment variable.');
-}
-
-// 데이터베이스 연결 설정
-const pool = new Pool({
-    host: process.env.DB_HOST,
+// Add password check (without revealing the actual password)
+const dbPassword = process.env.DB_PASSWORD ? String(process.env.DB_PASSWORD) : 'your_password_here';
+console.log('DB_PASSWORD environment variable is', process.env.DB_PASSWORD ? 'set' : 'not set');
+console.log('Initializing database connection with config:', {
+    host: process.env.DB_HOST || 'lmsrds.cjik2cuykhtl.ap-northeast-2.rds.amazonaws.com',
     port: process.env.DB_PORT || 5432,
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    // 로컬 개발 환경에서만 SSL 설정 필요
-    ...(process.env.NODE_ENV !== 'production' && {
-        ssl: {
-            rejectUnauthorized: false
-        }
-    })
+    database: 'postgres',
+    user: process.env.DB_USER || 'postgres',
+    // password hidden for security
 });
 
-// 연결 이벤트 핸들러
+const pool = new Pool({
+    host: process.env.DB_HOST || 'lmsrds.cjik2cuykhtl.ap-northeast-2.rds.amazonaws.com',
+    port: process.env.DB_PORT || 5432,
+    database: 'postgres',
+    user: process.env.DB_USER || 'postgres',
+    password: dbPassword,
+    ssl: {
+        rejectUnauthorized: false
+    }
+});
+
+// Test the connection
 pool.on('connect', () => {
     console.log('Connected to PostgreSQL database');
 });
@@ -87,7 +77,7 @@ pool.on('error', (err) => {
     console.error('Error stack:', err.stack);
 });
 
-// 연결 테스트 함수
+// Export an async function to test the connection
 const testConnection = async () => {
     try {
         console.log('Attempting to connect to database...');

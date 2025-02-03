@@ -411,4 +411,72 @@ router.get('/:courseId/students', verifyToken, async (req, res) => {
     }
 });
 
+// Get all students with their enrolled courses (Admin only)
+router.get('/admin/enrollments/all', verifyToken, async (req, res) => {
+    try {
+        // Check if the user is the specified admin
+        const adminId = 'f4282d3c-7061-700d-e22e-e236e6288087';
+        if (req.user.sub !== adminId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied. Only authorized admin can access this resource.'
+            });
+        }
+
+        const query = `
+            SELECT 
+                u.cognito_user_id,
+                u.name as student_name,
+                u.email as student_email,
+                json_agg(
+                    json_build_object(
+                        'course_id', c.id,
+                        'course_title', c.title,
+                        'enrollment_status', e.status,
+                        'enrolled_at', e.enrolled_at,
+                        'progress_status', pt.progress_status,
+                        'last_accessed_at', pt.last_accessed_at,
+                        'completion_date', pt.completion_date,
+                        'main_category', mc.name,
+                        'sub_category', sc.name
+                    ) ORDER BY e.enrolled_at DESC
+                ) as enrolled_courses
+            FROM ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u
+            LEFT JOIN ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS} e
+                ON u.cognito_user_id = e.student_id
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
+                ON e.course_id = c.id
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc
+                ON c.main_category_id = mc.id
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc
+                ON c.sub_category_id = sc.id
+            LEFT JOIN ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.PROGRESS_TRACKING} pt
+                ON e.id = pt.enrollment_id
+            WHERE u.role = 'STUDENT'
+            GROUP BY 
+                u.cognito_user_id,
+                u.name,
+                u.email
+            ORDER BY u.name
+        `;
+
+        const result = await pool.query(query);
+
+        res.json({
+            success: true,
+            data: {
+                students: result.rows,
+                total: result.rowCount
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching student enrollments:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch student enrollments',
+            error: error.message
+        });
+    }
+});
+
 module.exports = router; 

@@ -348,4 +348,67 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
     }
 });
 
+// Get enrolled students for a specific course (Admin only)
+router.get('/:courseId/students', verifyToken, async (req, res) => {
+    try {
+        const { courseId } = req.params;
+        
+        // Check if the user is the specified admin
+        const adminId = 'f4282d3c-7061-700d-e22e-e236e6288087';
+        if (req.user.sub !== adminId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied. Only authorized admin can access this resource.'
+            });
+        }
+
+        const query = `
+            SELECT 
+                u.cognito_user_id,
+                u.name,
+                u.email,
+                e.status as enrollment_status,
+                e.enrolled_at as enrollment_date,
+                e.updated_at as last_updated,
+                pt.progress_status,
+                pt.last_accessed_at,
+                pt.completion_date,
+                c.title as course_title,
+                c.description as course_description,
+                mc.name as main_category_name,
+                sc.name as sub_category_name
+            FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS} e
+            JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
+                ON e.student_id = u.cognito_user_id
+            JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c 
+                ON e.course_id = c.id
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
+                ON c.main_category_id = mc.id
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
+                ON c.sub_category_id = sc.id
+            LEFT JOIN ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.PROGRESS_TRACKING} pt
+                ON e.id = pt.enrollment_id
+            WHERE e.course_id = $1
+            ORDER BY e.enrolled_at DESC
+        `;
+
+        const result = await pool.query(query, [courseId]);
+
+        res.json({
+            success: true,
+            data: {
+                students: result.rows,
+                total: result.rowCount
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching enrolled students:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch enrolled students',
+            error: error.message
+        });
+    }
+});
+
 module.exports = router; 

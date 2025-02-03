@@ -199,22 +199,67 @@ router.get('/my/progress', verifyToken, requireRole(['STUDENT']), async (req, re
 });
 
 // Course management (Instructor/Admin)
-// TODO: fix this route
 router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
+    const client = await pool.connect();
     try {
-        const { title, description, is_public } = req.body;
-        const [result] = await pool.query(
-            'INSERT INTO courses (title, description, is_public) VALUES (?, ?, ?)',
-            [title, description, is_public]
-        );
+        const { 
+            title, 
+            description, 
+            instructor_id,
+            main_category_id,
+            sub_category_id,
+            thumbnail_url,
+            price,
+            level
+        } = req.body;
+
+        const query = `
+            INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+            (
+                title, 
+                description, 
+                instructor_id,
+                main_category_id,
+                sub_category_id,
+                thumbnail_url,
+                price,
+                level,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING *
+        `;
+
+        const values = [
+            title,
+            description,
+            instructor_id,
+            main_category_id,
+            sub_category_id,
+            thumbnail_url,
+            price,
+            level
+        ];
+
+        const result = await client.query(query, values);
         
         res.status(201).json({ 
-            message: 'Course created', 
-            courseId: result.insertId 
+            success: true,
+            message: 'Course created successfully',
+            data: {
+                course: result.rows[0]
+            }
         });
     } catch (error) {
         console.error('Error creating course:', error);
-        res.status(500).json({ message: 'Internal server error' });
+        res.status(500).json({ 
+            success: false,
+            message: 'Failed to create course',
+            error: error.message 
+        });
+    } finally {
+        client.release();
     }
 });
 
@@ -243,6 +288,63 @@ router.delete('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res
     } catch (error) {
         console.error('Error deleting course:', error);
         res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// Get enrolled courses for a student
+router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        
+        // 자신의 정보이거나 관리자만 조회 가능
+        if (req.user.sub !== studentId && !req.user.groups?.includes('ADMIN')) {
+            return res.status(403).json({
+                success: false,
+                message: 'Permission denied'
+            });
+        }
+
+        const query = `
+            SELECT 
+                c.*,
+                mc.name as main_category_name,
+                sc.name as sub_category_name,
+                u.name as instructor_name,
+                e.enrolled_at,
+                e.status as enrollment_status,
+                pt.progress_status,
+                pt.last_accessed_at
+            FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS} e
+            JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
+                ON e.course_id = c.id
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
+                ON c.main_category_id = mc.id
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
+                ON c.sub_category_id = sc.id
+            LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
+                ON c.instructor_id = u.cognito_user_id
+            LEFT JOIN ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.PROGRESS_TRACKING} pt
+                ON e.id = pt.enrollment_id
+            WHERE e.student_id = $1
+            ORDER BY e.enrolled_at DESC
+        `;
+
+        const result = await pool.query(query, [studentId]);
+
+        res.json({
+            success: true,
+            data: {
+                courses: result.rows,
+                total: result.rowCount
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching enrolled courses:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch enrolled courses',
+            error: error.message
+        });
     }
 });
 

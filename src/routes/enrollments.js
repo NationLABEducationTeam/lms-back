@@ -1,187 +1,210 @@
 const express = require('express');
 const router = express.Router();
-const { pool, SCHEMAS, TABLES } = require('../config/database');
 const { verifyToken, requireRole } = require('../middlewares/auth');
+const { getPool, SCHEMAS, TABLES } = require('../config/database');
 
-// 수강신청
-router.post('/', verifyToken, requireRole(['STUDENT']), async (req, res) => {
+// Create enrollment
+router.post('/', verifyToken, async (req, res) => {
+    const pool = getPool('write');
     const client = await pool.connect();
+    
     try {
         const { courseId, userId, enrolledAt } = req.body;
-        console.log('Enrollment request received:', { courseId, userId, enrolledAt });
-        
-        // 트랜잭션 시작
+
         await client.query('BEGIN');
-        console.log('Transaction started');
 
-        // 1. 강의가 존재하는지 확인
-        const courseQuery = `
-            SELECT * FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
-            WHERE id = $1
+        // Check if the enrollment already exists
+        const checkQuery = `
+            SELECT id FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS}
+            WHERE course_id = $1 AND student_id = $2
         `;
-        console.log('Checking course existence with query:', courseQuery);
-        const courseResult = await client.query(courseQuery, [courseId]);
-        console.log('Course query result:', courseResult.rows);
-        
-        if (courseResult.rows.length === 0) {
-            await client.query('ROLLBACK');
-            console.log('Course not found, rolling back transaction');
-            return res.status(404).json({
-                success: false,
-                message: 'Course not found'
-            });
+        const checkResult = await client.query(checkQuery, [courseId, userId]);
+
+        if (checkResult.rows.length > 0) {
+            throw new Error('User is already enrolled in this course');
         }
 
-        // 2. 이미 수강신청한 강의인지 확인
-        const existingEnrollmentQuery = `
-            SELECT * FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS}
-            WHERE student_id = $1 AND course_id = $2
-        `;
-        console.log('Checking existing enrollment with query:', existingEnrollmentQuery);
-        const existingEnrollment = await client.query(existingEnrollmentQuery, [userId, courseId]);
-        console.log('Existing enrollment query result:', existingEnrollment.rows);
-        
-        if (existingEnrollment.rows.length > 0) {
-            await client.query('ROLLBACK');
-            console.log('Already enrolled, rolling back transaction');
-            return res.status(400).json({
-                success: false,
-                message: 'Already enrolled in this course'
-            });
-        }
-
-        // 3. 수강신청 정보 저장
+        // Create enrollment
         const enrollmentQuery = `
             INSERT INTO ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS}
-            (student_id, course_id, enrolled_at, status)
+            (course_id, student_id, enrolled_at, status)
             VALUES ($1, $2, $3, 'ACTIVE')
             RETURNING *
         `;
-        console.log('Inserting enrollment with query:', enrollmentQuery);
-        console.log('Enrollment parameters:', [userId, courseId, enrolledAt || new Date()]);
-        const enrollmentResult = await client.query(enrollmentQuery, [
-            userId,
-            courseId,
-            enrolledAt || new Date()
-        ]);
-        console.log('Enrollment insert result:', enrollmentResult.rows[0]);
+        const enrollmentResult = await client.query(enrollmentQuery, [courseId, userId, enrolledAt || new Date()]);
 
-        // 4. 학습 진도 정보 초기화
+        // Create initial progress tracking
         const progressQuery = `
             INSERT INTO ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.PROGRESS_TRACKING}
             (enrollment_id, progress_status, last_accessed_at)
             VALUES ($1, 'NOT_STARTED', $2)
+            RETURNING *
         `;
-        console.log('Inserting progress tracking with query:', progressQuery);
-        await client.query(progressQuery, [
-            enrollmentResult.rows[0].id,
-            new Date()
-        ]);
-        console.log('Progress tracking inserted successfully');
+        const progressResult = await client.query(progressQuery, [enrollmentResult.rows[0].id, enrolledAt || new Date()]);
 
-        // 트랜잭션 커밋
         await client.query('COMMIT');
-        console.log('Transaction committed successfully');
 
         res.status(201).json({
             success: true,
-            message: 'Successfully enrolled in the course',
+            message: 'Enrollment created successfully',
             data: {
-                enrollment: enrollmentResult.rows[0]
+                enrollment: {
+                    ...enrollmentResult.rows[0],
+                    progress: progressResult.rows[0]
+                }
             }
         });
-
     } catch (error) {
         await client.query('ROLLBACK');
-        console.error('Error during enrollment:', error);
-        console.error('Error stack:', error.stack);
+        console.error('Error creating enrollment:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to enroll in the course',
-            error: error.message,
-            details: error.stack
+            message: 'Failed to create enrollment',
+            error: error.message
         });
     } finally {
         client.release();
     }
 });
 
-// 수강신청 상태 확인
-router.get('/status/:courseId', verifyToken, async (req, res) => {
+// Get enrollments for a course
+router.get('/course/:courseId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     try {
         const { courseId } = req.params;
-        const userId = req.user.sub;
+        const pool = getPool('read');
 
         const query = `
             SELECT 
                 e.*,
-                pt.progress_percentage,
-                pt.last_accessed
+                u.name as student_name,
+                u.email as student_email,
+                pt.progress_status,
+                pt.last_accessed_at,
+                pt.completion_date
             FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS} e
+            JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
+                ON e.student_id = u.cognito_user_id
             LEFT JOIN ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.PROGRESS_TRACKING} pt
                 ON e.id = pt.enrollment_id
-            WHERE e.student_id = $1 AND e.course_id = $2
+            WHERE e.course_id = $1
+            ORDER BY e.enrolled_at DESC
         `;
 
-        const result = await pool.query(query, [userId, courseId]);
+        const result = await pool.query(query, [courseId]);
 
         res.json({
             success: true,
             data: {
-                isEnrolled: result.rows.length > 0,
-                enrollment: result.rows[0] || null
+                enrollments: result.rows,
+                total: result.rowCount
             }
         });
     } catch (error) {
-        console.error('Error checking enrollment status:', error);
+        console.error('Error fetching course enrollments:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to check enrollment status',
+            message: 'Failed to fetch enrollments',
             error: error.message
         });
     }
 });
 
-// 학생이 수강 신청한 과목 목록 조회
-router.get('/my-courses', verifyToken, requireRole(['STUDENT']), async (req, res) => {
+// Get enrollments for a student
+router.get('/student/:studentId', verifyToken, async (req, res) => {
     try {
-        const userId = req.user.sub;
+        const { studentId } = req.params;
+        
+        // 자신의 정보이거나 관리자만 조회 가능
+        if (req.user.sub !== studentId && !req.user.groups?.includes('ADMIN')) {
+            return res.status(403).json({
+                success: false,
+                message: 'Permission denied'
+            });
+        }
 
+        const pool = getPool('read');
         const query = `
             SELECT 
-                c.*,
-                e.enrolled_at,
-                e.status as enrollment_status,
+                e.*,
+                c.title as course_title,
+                c.description as course_description,
                 pt.progress_status,
                 pt.last_accessed_at,
-                u.name as instructor_name
+                pt.completion_date
             FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS} e
-            JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
+            JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c 
                 ON e.course_id = c.id
             LEFT JOIN ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.PROGRESS_TRACKING} pt
                 ON e.id = pt.enrollment_id
-            LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u
-                ON c.instructor_id = u.id
             WHERE e.student_id = $1
             ORDER BY e.enrolled_at DESC
         `;
 
-        const result = await pool.query(query, [userId]);
+        const result = await pool.query(query, [studentId]);
 
         res.json({
             success: true,
             data: {
-                courses: result.rows,
+                enrollments: result.rows,
                 total: result.rowCount
             }
         });
     } catch (error) {
-        console.error('Error fetching enrolled courses:', error);
+        console.error('Error fetching student enrollments:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch enrolled courses',
+            message: 'Failed to fetch enrollments',
             error: error.message
         });
+    }
+});
+
+// Update enrollment status
+router.put('/:enrollmentId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
+    const pool = getPool('write');
+    const client = await pool.connect();
+    
+    try {
+        const { enrollmentId } = req.params;
+        const { status } = req.body;
+
+        await client.query('BEGIN');
+
+        // Update enrollment status
+        const query = `
+            UPDATE ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS}
+            SET 
+                status = $1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+            RETURNING *
+        `;
+        
+        const result = await client.query(query, [status, enrollmentId]);
+
+        if (result.rows.length === 0) {
+            throw new Error('Enrollment not found');
+        }
+
+        await client.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: 'Enrollment status updated successfully',
+            data: {
+                enrollment: result.rows[0]
+            }
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error updating enrollment status:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update enrollment status',
+            error: error.message
+        });
+    } finally {
+        client.release();
     }
 });
 

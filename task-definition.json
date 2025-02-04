@@ -47,6 +47,14 @@
                 {
                     "name": "COGNITO_JWKS_URL",
                     "value": "https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_RWIv2Yp2f/.well-known/jwks.json"
+                },
+                {
+                    "name": "ELASTICACHE_HOST",
+                    "value": "your-elasticache-endpoint.cache.amazonaws.com"
+                },
+                {
+                    "name": "ELASTICACHE_PORT",
+                    "value": "6379"
                 }
             ],
             "logConfiguration": {

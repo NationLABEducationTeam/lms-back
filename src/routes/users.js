@@ -1,93 +1,140 @@
 const express = require('express');
 const router = express.Router();
-const { pool, SCHEMAS, TABLES } = require('../config/database');
 const { verifyToken, requireRole } = require('../middlewares/auth');
+const { getPool, SCHEMAS, TABLES } = require('../config/database');
 
 // Get all users
 router.get('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
+        const pool = getPool('read');
         const query = `
             SELECT 
-                cognito_user_id, 
-                name, 
-                email, 
-                role,
-                created_at,
-                updated_at
-            FROM ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS}
-            ORDER BY created_at DESC
+                u.cognito_user_id,
+                u.name,
+                u.email,
+                u.role,
+                u.created_at,
+                u.updated_at
+            FROM ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u
+            ORDER BY u.created_at DESC
         `;
         
-        const client = await pool.connect();
-        try {
-            const result = await client.query(query);
-            res.json({
-                success: true,
-                source: 'database',
-                data: result.rows
-            });
-        } finally {
-            client.release();
-        }
+        const result = await pool.query(query);
+        
+        res.json({
+            success: true,
+            data: {
+                users: result.rows,
+                total: result.rowCount
+            }
+        });
     } catch (error) {
-        console.error('Error fetching users:', error);
-        res.status(500).json({ 
+        console.error('Error fetching all users:', error);
+        res.status(500).json({
             success: false,
             message: 'Failed to fetch users',
-            error: error.message 
+            error: error.message
         });
     }
 });
 
-// Get user by cognito_user_id
-router.get('/:id', verifyToken, async (req, res) => {
+// Get user by ID
+router.get('/:userId', verifyToken, async (req, res) => {
     try {
-        const { id } = req.params;
+        const { userId } = req.params;
         
         // 자신의 정보이거나 관리자만 조회 가능
-        if (req.user.sub !== id && !req.user.groups?.includes('ADMIN')) {
+        if (req.user.sub !== userId && !req.user.groups?.includes('ADMIN')) {
             return res.status(403).json({
                 success: false,
                 message: 'Permission denied'
             });
         }
 
+        const pool = getPool('read');
         const query = `
             SELECT 
-                cognito_user_id,
-                name,
-                email,
-                role,
-                created_at,
-                updated_at
-            FROM ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS}
-            WHERE cognito_user_id = $1
+                u.cognito_user_id,
+                u.name,
+                u.email,
+                u.role,
+                u.created_at,
+                u.updated_at
+            FROM ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u
+            WHERE u.cognito_user_id = $1
         `;
         
-        const client = await pool.connect();
-        try {
-            const result = await client.query(query, [id]);
-            
-            if (result.rows.length === 0) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'User not found'
-                });
-            }
-
-            res.json({
-                success: true,
-                source: 'database',
-                data: result.rows[0]
+        const result = await pool.query(query, [userId]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
             });
-        } finally {
-            client.release();
         }
+        
+        res.json({
+            success: true,
+            data: {
+                user: result.rows[0]
+            }
+        });
     } catch (error) {
         console.error('Error fetching user:', error);
         res.status(500).json({
             success: false,
             message: 'Failed to fetch user',
+            error: error.message
+        });
+    }
+});
+
+// Update user
+router.put('/:userId', verifyToken, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { name, email } = req.body;
+        
+        // 자신의 정보만 수정 가능
+        if (req.user.sub !== userId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Permission denied'
+            });
+        }
+
+        const pool = getPool('write');
+        const query = `
+            UPDATE ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS}
+            SET 
+                name = COALESCE($1, name),
+                email = COALESCE($2, email),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE cognito_user_id = $3
+            RETURNING *
+        `;
+        
+        const result = await pool.query(query, [name, email, userId]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+        
+        res.json({
+            success: true,
+            message: 'User updated successfully',
+            data: {
+                user: result.rows[0]
+            }
+        });
+    } catch (error) {
+        console.error('Error updating user:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update user',
             error: error.message
         });
     }

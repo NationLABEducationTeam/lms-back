@@ -1,37 +1,27 @@
 const express = require('express');
 const router = express.Router();
 const { verifyToken, requireRole } = require('../middlewares/auth');
-const dynamodb = require('../config/dynamodb');
-const { pool, testConnection } = require('../config/database');
-const { SCHEMAS, TABLES } = require('../config/database');
+const { masterPool, getPool, SCHEMAS, TABLES } = require('../config/database');
 
 const TABLE_NAME = 'nationslab-courses';
 
-// Test database connection
+// Test database connection (using master)
 router.get('/test-db', async (req, res) => {
     console.log('Attempting to test database connection...');
     try {
-        const isConnected = await testConnection();
-        if (isConnected) {
+        const client = await masterPool.connect();
+        if (client) {
             res.json({
                 message: 'Database connection successful',
                 connected: true
             });
-        } else {
-            res.status(500).json({
-                message: 'Database connection failed',
-                connected: false
-            });
+            client.release();
         }
     } catch (error) {
-        console.error('Database connection test failed:');
-        console.error('Error name:', error.name);
-        console.error('Error message:', error.message);
-        console.error('Error stack:', error.stack);
+        console.error('Database connection test failed:', error);
         res.status(500).json({
             message: 'Database connection failed',
             error: error.message,
-            errorName: error.name,
             connected: false
         });
     }
@@ -56,7 +46,7 @@ router.get('/public', async (req, res) => {
             ORDER BY c.created_at DESC
         `;
 
-        const result = await pool.query(query);
+        const result = await getPool('read').query(query);
         
         res.json({
             success: true,
@@ -75,9 +65,10 @@ router.get('/public', async (req, res) => {
     }
 });
 
-// Get all courses (Public)
+// Get all courses (Public) - Using Read Replica
 router.get('/', async (req, res) => {
     try {
+        const pool = getPool('read');
         const query = `
             SELECT 
                 c.*,
@@ -136,7 +127,7 @@ router.get('/:courseId', async (req, res) => {
             WHERE c.id = $1
         `;
         
-        const result = await pool.query(query, [courseId]);
+        const result = await getPool('read').query(query, [courseId]);
         
         if (result.rows.length === 0) {
             return res.status(404).json({
@@ -167,7 +158,7 @@ router.post('/:courseId/enroll', verifyToken, requireRole(['STUDENT']), async (r
         const { courseId } = req.params;
         const userId = req.user.sub;
         
-        await pool.query(
+        await getPool('write').query(
             'INSERT INTO student_courses (student_id, course_id) VALUES (?, ?)',
             [userId, courseId]
         );
@@ -183,7 +174,7 @@ router.post('/:courseId/enroll', verifyToken, requireRole(['STUDENT']), async (r
 router.get('/my/progress', verifyToken, requireRole(['STUDENT']), async (req, res) => {
     try {
         const userId = req.user.sub;
-        const [progress] = await pool.query(
+        const [progress] = await getPool('read').query(
             `SELECT c.*, sc.progress_percentage, sc.last_accessed 
              FROM courses c 
              JOIN student_courses sc ON c.id = sc.course_id 
@@ -198,9 +189,9 @@ router.get('/my/progress', verifyToken, requireRole(['STUDENT']), async (req, re
     }
 });
 
-// Course management (Instructor/Admin)
+// Create course - Using Master DB
 router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
-    const client = await pool.connect();
+    const client = await masterPool.connect();
     try {
         await client.query('BEGIN');  // Start transaction
 
@@ -320,7 +311,7 @@ router.put('/:courseId', verifyToken, requireRole(['INSTRUCTOR', 'ADMIN']), asyn
         const { courseId } = req.params;
         const { title, description, is_public } = req.body;
         
-        await pool.query(
+        await getPool('write').query(
             'UPDATE courses SET title = ?, description = ?, is_public = ? WHERE id = ?',
             [title, description, is_public, courseId]
         );
@@ -332,8 +323,9 @@ router.put('/:courseId', verifyToken, requireRole(['INSTRUCTOR', 'ADMIN']), asyn
     }
 });
 
+// Delete course - Using Master DB
 router.delete('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
-    const client = await pool.connect();
+    const client = await masterPool.connect();
     try {
         const { courseId } = req.params;
         console.log('Attempting to delete course:', courseId);
@@ -370,7 +362,7 @@ router.delete('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res
             DELETE FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
             WHERE id = $1
         `, [courseId]);
-
+        
         await client.query('COMMIT');
 
         res.json({
@@ -393,12 +385,11 @@ router.delete('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res
     }
 });
 
-// Get enrolled courses for a student
+// Get enrolled courses for a student - Using Read Replica
 router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
     try {
         const { studentId } = req.params;
         
-        // 자신의 정보이거나 관리자만 조회 가능
         if (req.user.sub !== studentId && !req.user.groups?.includes('ADMIN')) {
             return res.status(403).json({
                 success: false,
@@ -406,6 +397,7 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
             });
         }
 
+        const pool = getPool('read');
         const query = `
             SELECT 
                 c.*,
@@ -494,7 +486,7 @@ router.get('/:courseId/students', verifyToken, async (req, res) => {
             ORDER BY e.enrolled_at DESC
         `;
 
-        const result = await pool.query(query, [courseId]);
+        const result = await getPool('read').query(query, [courseId]);
 
         res.json({
             success: true,
@@ -513,10 +505,9 @@ router.get('/:courseId/students', verifyToken, async (req, res) => {
     }
 });
 
-// Get all students with their enrolled courses (Admin only)
+// Get all student enrollments (Admin only) - Using Read Replica
 router.get('/admin/enrollments/all', verifyToken, async (req, res) => {
     try {
-        // Check if the user is the specified admin
         const adminId = 'f4282d3c-7061-700d-e22e-e236e6288087';
         if (req.user.sub !== adminId) {
             return res.status(403).json({
@@ -525,6 +516,7 @@ router.get('/admin/enrollments/all', verifyToken, async (req, res) => {
             });
         }
 
+        const pool = getPool('read');
         const query = `
             SELECT 
                 u.cognito_user_id,

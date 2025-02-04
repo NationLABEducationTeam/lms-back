@@ -202,17 +202,58 @@ router.get('/my/progress', verifyToken, requireRole(['STUDENT']), async (req, re
 router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     const client = await pool.connect();
     try {
+        await client.query('BEGIN');  // Start transaction
+
         const { 
             title, 
             description, 
             instructor_id,
-            main_category_id,
-            sub_category_id,
+            main_category_name,  // Changed from main_category_id
+            sub_category_name,   // Changed from sub_category_id
             thumbnail_url,
             price,
             level
         } = req.body;
 
+        // Check and create main category if it doesn't exist
+        let main_category_id;
+        const mainCategoryResult = await client.query(`
+            SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES}
+            WHERE name = $1
+        `, [main_category_name]);
+
+        if (mainCategoryResult.rows.length === 0) {
+            const newMainCategory = await client.query(`
+                INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES}
+                (name)
+                VALUES ($1)
+                RETURNING id
+            `, [main_category_name]);
+            main_category_id = newMainCategory.rows[0].id;
+        } else {
+            main_category_id = mainCategoryResult.rows[0].id;
+        }
+
+        // Check and create sub category if it doesn't exist
+        let sub_category_id;
+        const subCategoryResult = await client.query(`
+            SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES}
+            WHERE name = $1 AND main_category_id = $2
+        `, [sub_category_name, main_category_id]);
+
+        if (subCategoryResult.rows.length === 0) {
+            const newSubCategory = await client.query(`
+                INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES}
+                (name, main_category_id)
+                VALUES ($1, $2)
+                RETURNING id
+            `, [sub_category_name, main_category_id]);
+            sub_category_id = newSubCategory.rows[0].id;
+        } else {
+            sub_category_id = subCategoryResult.rows[0].id;
+        }
+
+        // Create the course
         const query = `
             INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
             (
@@ -223,11 +264,9 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
                 sub_category_id,
                 thumbnail_url,
                 price,
-                level,
-                created_at,
-                updated_at
+                level
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
         `;
 
@@ -244,6 +283,8 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
 
         const result = await client.query(query, values);
         
+        await client.query('COMMIT');  // Commit transaction
+
         res.status(201).json({ 
             success: true,
             message: 'Course created successfully',
@@ -252,6 +293,7 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             }
         });
     } catch (error) {
+        await client.query('ROLLBACK');  // Rollback on error
         console.error('Error creating course:', error);
         res.status(500).json({ 
             success: false,

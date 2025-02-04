@@ -208,49 +208,47 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             title, 
             description, 
             instructor_id,
-            main_category_name,  // Changed from main_category_id
-            sub_category_name,   // Changed from sub_category_id
+            main_category_id,
+            sub_category_id,
             thumbnail_url,
             price,
             level
         } = req.body;
 
-        // Check and create main category if it doesn't exist
-        let main_category_id;
-        const mainCategoryResult = await client.query(`
-            SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES}
-            WHERE name = $1
-        `, [main_category_name]);
-
-        if (mainCategoryResult.rows.length === 0) {
-            const newMainCategory = await client.query(`
-                INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES}
-                (name)
-                VALUES ($1)
-                RETURNING id
-            `, [main_category_name]);
-            main_category_id = newMainCategory.rows[0].id;
-        } else {
-            main_category_id = mainCategoryResult.rows[0].id;
+        // Validate required fields
+        if (!title || !description || !instructor_id || !main_category_id || !sub_category_id) {
+            throw new Error('Missing required fields: title, description, instructor_id, main_category_id, and sub_category_id are required');
         }
 
-        // Check and create sub category if it doesn't exist
-        let sub_category_id;
+        console.log('Received course creation request:', {
+            title,
+            description,
+            instructor_id,
+            main_category_id,
+            sub_category_id,
+            thumbnail_url,
+            price,
+            level
+        });
+
+        // Check if main category exists
+        const mainCategoryResult = await client.query(`
+            SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES}
+            WHERE id = $1
+        `, [main_category_id]);
+
+        if (mainCategoryResult.rows.length === 0) {
+            throw new Error(`Main category with id ${main_category_id} does not exist`);
+        }
+
+        // Check if sub category exists
         const subCategoryResult = await client.query(`
             SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES}
-            WHERE name = $1 AND main_category_id = $2
-        `, [sub_category_name, main_category_id]);
+            WHERE id = $1 AND main_category_id = $2
+        `, [sub_category_id, main_category_id]);
 
         if (subCategoryResult.rows.length === 0) {
-            const newSubCategory = await client.query(`
-                INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES}
-                (name, main_category_id)
-                VALUES ($1, $2)
-                RETURNING id
-            `, [sub_category_name, main_category_id]);
-            sub_category_id = newSubCategory.rows[0].id;
-        } else {
-            sub_category_id = subCategoryResult.rows[0].id;
+            throw new Error(`Sub category with id ${sub_category_id} does not exist for main category ${main_category_id}`);
         }
 
         // Create the course

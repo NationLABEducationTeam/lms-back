@@ -231,24 +231,36 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             level
         });
 
-        // Check if main category exists
-        const mainCategoryResult = await client.query(`
+        // Check if main category exists, if not create it
+        let mainCategoryResult = await client.query(`
             SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES}
             WHERE id = $1
         `, [main_category_id]);
 
         if (mainCategoryResult.rows.length === 0) {
-            throw new Error(`Main category with id ${main_category_id} does not exist`);
+            console.log(`Creating new main category: ${main_category_id}`);
+            mainCategoryResult = await client.query(`
+                INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES}
+                (id, name)
+                VALUES ($1, $1)
+                RETURNING id
+            `, [main_category_id]);
         }
 
-        // Check if sub category exists
-        const subCategoryResult = await client.query(`
+        // Check if sub category exists, if not create it
+        let subCategoryResult = await client.query(`
             SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES}
             WHERE id = $1 AND main_category_id = $2
         `, [sub_category_id, main_category_id]);
 
         if (subCategoryResult.rows.length === 0) {
-            throw new Error(`Sub category with id ${sub_category_id} does not exist for main category ${main_category_id}`);
+            console.log(`Creating new sub category: ${sub_category_id} under ${main_category_id}`);
+            subCategoryResult = await client.query(`
+                INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES}
+                (id, name, main_category_id)
+                VALUES ($1, $1, $2)
+                RETURNING id
+            `, [sub_category_id, main_category_id]);
         }
 
         // Create the course

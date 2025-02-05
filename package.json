@@ -17,6 +17,7 @@
   "description": "LMS Backend using Express.js and AWS Services",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.730.0",
+    "@aws-sdk/client-s3": "^3.741.0",
     "@aws-sdk/credential-providers": "^3.730.0",
     "@aws-sdk/lib-dynamodb": "^3.730.0",
     "aws-sdk": "^2.1550.0",

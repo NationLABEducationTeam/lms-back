@@ -32,7 +32,7 @@ async function listCourseWeekMaterials(prefix) {
                 // "1주차/" -> "week1"로 변환
                 const folderName = prefix.Prefix.split('/').slice(-2)[0];  // "1주차"
                 const weekNumber = folderName.replace(/[^0-9]/g, '');  // "1"
-                const weekName = `week${weekNumber}`;  // "week1"
+                const weekName = `week${weekNumber}`;  // "week123"
                 
                 const weekFiles = await listWeekFiles(prefix.Prefix);
                 weeklyMaterials[weekName] = weekFiles;

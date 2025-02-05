@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { verifyToken, requireRole } = require('../middlewares/auth');
 const { masterPool, getPool, SCHEMAS, TABLES } = require('../config/database');
+const { listCourseWeekMaterials } = require('../utils/s3');
 
 const TABLE_NAME = 'nationslab-courses';
 
@@ -26,6 +27,9 @@ router.get('/test-db', async (req, res) => {
         });
     }
 });
+
+
+
 
 // Public routes - Get all published courses
 router.get('/public', async (req, res) => {
@@ -65,7 +69,54 @@ router.get('/public', async (req, res) => {
     }
 });
 
-// Get all courses (Public) - Using Read Replica
+router.get('/public/:courseId', async (req, res) => {
+    try {
+        const { courseId } = req.params;
+        const query = `
+            SELECT 
+                c.*,
+                mc.name as main_category_name,
+                mc.id as main_category_id,
+                sc.name as sub_category_name,
+                sc.id as sub_category_id,
+                u.name as instructor_name,
+                u.cognito_user_id as instructor_id
+            FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
+                ON c.main_category_id = mc.id
+            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
+                ON c.sub_category_id = sc.id
+            LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
+                ON c.instructor_id = u.cognito_user_id
+            WHERE c.id = $1
+        `;
+        
+        const result = await getPool('read').query(query, [courseId]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Course not found'
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: {
+                course: result.rows[0]
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching course:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch course',
+            error: error.message
+        });
+    }
+});
+
+
 router.get('/', async (req, res) => {
     try {
         const pool = getPool('read');
@@ -103,6 +154,9 @@ router.get('/', async (req, res) => {
         });
     }
 });
+
+
+
 
 // Get specific course
 router.get('/:courseId', async (req, res) => {
@@ -151,6 +205,8 @@ router.get('/:courseId', async (req, res) => {
         });
     }
 });
+
+
 
 // Student enrollment
 router.post('/:courseId/enroll', verifyToken, requireRole(['STUDENT']), async (req, res) => {
@@ -425,10 +481,47 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
 
         const result = await pool.query(query, [studentId]);
 
+        // S3에서 각 강좌의 주차 자료 조회
+        const coursesWithMaterials = await Promise.all(result.rows.map(async (course) => {
+            // courseId 대신 강좌 제목을 prefix로 사용
+            const coursePrefix = `${course.title}/`;
+            console.log('Fetching materials for course:', coursePrefix);  // 디버깅용
+            const weeklyMaterials = await listCourseWeekMaterials(coursePrefix);
+            
+            // 주차별 데이터를 정렬하여 배열로 변환
+            const weeks = Object.entries(weeklyMaterials)
+                .sort(([weekA], [weekB]) => {
+                    const numA = parseInt(weekA.replace('week', ''));
+                    const numB = parseInt(weekB.replace('week', ''));
+                    return numA - numB;
+                })
+                .map(([weekName, files]) => ({
+                    weekName,
+                    weekNumber: parseInt(weekName.replace('week', '')),
+                    materials: files.reduce((acc, file) => {
+                        if (!acc[file.type]) {
+                            acc[file.type] = [];
+                        }
+                        acc[file.type].push({
+                            fileName: file.fileName,
+                            downloadUrl: `https://nationslablmscoursebucket.s3.ap-northeast-2.amazonaws.com/${file.key}`,
+                            lastModified: file.lastModified,
+                            size: file.size
+                        });
+                        return acc;
+                    }, {})
+                }));
+
+            return {
+                ...course,
+                weeks: weeks
+            };
+        }));
+
         res.json({
             success: true,
             data: {
-                courses: result.rows,
+                courses: coursesWithMaterials,
                 total: result.rowCount
             }
         });
@@ -508,6 +601,7 @@ router.get('/:courseId/students', verifyToken, async (req, res) => {
 // Get all student enrollments (Admin only) - Using Read Replica
 router.get('/admin/enrollments/all', verifyToken, async (req, res) => {
     try {
+        // TODO: 관리자의 경우 극소수이기 때문에 나중에는 하드 코딩 또는 환경변수로 저장 후 비교
         const adminId = 'f4282d3c-7061-700d-e22e-e236e6288087';
         if (req.user.sub !== adminId) {
             return res.status(403).json({

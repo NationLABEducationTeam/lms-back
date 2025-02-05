@@ -29,7 +29,11 @@ async function listCourseWeekMaterials(prefix) {
         // CommonPrefixes는 폴더를 나타냅니다 (예: "1주차/", "2주차/" 등)
         if (response.CommonPrefixes) {
             for (const prefix of response.CommonPrefixes) {
-                const weekName = prefix.Prefix.split('/').slice(-2)[0];
+                // "1주차/" -> "week1"로 변환
+                const folderName = prefix.Prefix.split('/').slice(-2)[0];  // "1주차"
+                const weekNumber = folderName.replace(/[^0-9]/g, '');  // "1"
+                const weekName = `week${weekNumber}`;  // "week1"
+                
                 const weekFiles = await listWeekFiles(prefix.Prefix);
                 weeklyMaterials[weekName] = weekFiles;
             }

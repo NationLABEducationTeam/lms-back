@@ -20,6 +20,7 @@
     "@aws-sdk/client-s3": "^3.741.0",
     "@aws-sdk/credential-providers": "^3.730.0",
     "@aws-sdk/lib-dynamodb": "^3.730.0",
+    "@aws-sdk/s3-request-presigner": "^3.741.0",
     "aws-sdk": "^2.1550.0",
     "axios": "^1.7.9",
     "chalk": "^4.1.2",

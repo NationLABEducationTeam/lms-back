@@ -379,68 +379,6 @@ router.put('/:courseId', verifyToken, requireRole(['INSTRUCTOR', 'ADMIN']), asyn
     }
 });
 
-// Delete course - Using Master DB
-router.delete('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
-    const client = await masterPool.connect();
-    try {
-        const { courseId } = req.params;
-        console.log('Attempting to delete course:', courseId);
-
-        await client.query('BEGIN');
-
-        // First check if the course exists
-        const checkResult = await client.query(`
-            SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
-            WHERE id = $1
-        `, [courseId]);
-
-        if (checkResult.rows.length === 0) {
-            throw new Error('Course not found');
-        }
-
-        // Delete related records in progress_tracking
-        await client.query(`
-            DELETE FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.PROGRESS_TRACKING}
-            WHERE enrollment_id IN (
-                SELECT id FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS}
-                WHERE course_id = $1
-            )
-        `, [courseId]);
-
-        // Delete enrollments
-        await client.query(`
-            DELETE FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS}
-            WHERE course_id = $1
-        `, [courseId]);
-
-        // Finally delete the course
-        await client.query(`
-            DELETE FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
-            WHERE id = $1
-        `, [courseId]);
-        
-        await client.query('COMMIT');
-
-        res.json({
-            success: true,
-            message: 'Course and related records deleted successfully',
-            data: {
-                courseId
-            }
-        });
-    } catch (error) {
-        await client.query('ROLLBACK');
-        console.error('Error deleting course:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to delete course',
-            error: error.message
-        });
-    } finally {
-        client.release();
-    }
-});
-
 // Get enrolled courses for a student - Using Read Replica
 router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
     try {

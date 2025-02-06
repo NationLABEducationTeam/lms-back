@@ -114,8 +114,7 @@ app.use(`${API_PREFIX}/students`, studentsRouter);
 app.use(`${API_PREFIX}/ai`, aiRouter);
 app.use(`${API_PREFIX}/users`, usersRouter);
 app.use(`${API_PREFIX}/enrollments`, enrollmentsRouter);
-app.use('/courses', require('./src/routes/courses'));
-app.use('/admin/courses', require('./src/routes/admin/courses'));
+app.use(`${API_PREFIX}/admin/courses`, require('./src/routes/admin/courses'));
 
 // Handle 404 errors
 app.use(notFound);

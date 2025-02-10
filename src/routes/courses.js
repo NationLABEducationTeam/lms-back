@@ -39,7 +39,8 @@ router.get('/public', async (req, res) => {
                 c.*,
                 mc.name as main_category_name,
                 sc.name as sub_category_name,
-                u.name as instructor_name
+                u.name as instructor_name,
+                c.classmode
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
             LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
                 ON c.main_category_id = mc.id
@@ -80,7 +81,8 @@ router.get('/public/:courseId', async (req, res) => {
                 sc.name as sub_category_name,
                 sc.id as sub_category_id,
                 u.name as instructor_name,
-                u.cognito_user_id as instructor_id
+                u.cognito_user_id as instructor_id,
+                c.classmode
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
             LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
                 ON c.main_category_id = mc.id
@@ -170,7 +172,8 @@ router.get('/:courseId', async (req, res) => {
                 sc.name as sub_category_name,
                 sc.id as sub_category_id,
                 u.name as instructor_name,
-                u.cognito_user_id as instructor_id
+                u.cognito_user_id as instructor_id,
+                c.classmode
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
             LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
                 ON c.main_category_id = mc.id
@@ -251,6 +254,8 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
         await client.query('BEGIN');  // Start transaction
 
+        console.log('Request body:', req.body);  // 요청 바디 전체 로깅
+
         const { 
             title, 
             description, 
@@ -259,24 +264,54 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             sub_category_id,
             thumbnail_url,
             price,
-            level
+            level,
+            classmode
         } = req.body;
 
+        // 각 필드 값 로깅
+        // console.log('Parsed fields:', {
+        //     title,
+        //     description,
+        //     instructor_id,
+        //     main_category_id,
+        //     sub_category_id,
+        //     thumbnail_url,
+        //     price,
+        //     level,
+        //     classmode
+        // });
+
         // Validate required fields
-        if (!title || !description || !instructor_id || !main_category_id || !sub_category_id) {
-            throw new Error('Missing required fields: title, description, instructor_id, main_category_id, and sub_category_id are required');
+        if (!title || !description || !instructor_id || !main_category_id || !sub_category_id || !classmode) {
+            console.log('Missing fields:', {
+                title: !!title,
+                description: !!description,
+                instructor_id: !!instructor_id,
+                main_category_id: !!main_category_id,
+                sub_category_id: !!sub_category_id,
+                classmode: !!classmode
+            });
+            throw new Error('Missing required fields: title, description, instructor_id, main_category_id, sub_category_id, and classmode are required');
         }
 
-        console.log('Received course creation request:', {
-            title,
-            description,
-            instructor_id,
-            main_category_id,
-            sub_category_id,
-            thumbnail_url,
-            price,
-            level
-        });
+        // Validate classmode
+        console.log('Validating classmode:', classmode);
+        if (!['ONLINE', 'VOD'].includes(classmode.toUpperCase())) {
+            console.log('Invalid classmode value:', classmode);
+            throw new Error('Invalid classmode. Must be either ONLINE or VOD');
+        }
+
+        // console.log('Received course creation request:', {
+        //     title,
+        //     description,
+        //     instructor_id,
+        //     main_category_id,
+        //     sub_category_id,
+        //     thumbnail_url,
+        //     price,
+        //     level,
+        //     classmode
+        // });
 
         // Check if main category exists, if not create it
         let mainCategoryResult = await client.query(`
@@ -310,7 +345,7 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             `, [sub_category_id, main_category_id]);
         }
 
-        // Create the course
+        // Create the course with classmode
         const query = `
             INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
             (
@@ -321,9 +356,10 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
                 sub_category_id,
                 thumbnail_url,
                 price,
-                level
+                level,
+                classmode
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING *
         `;
 
@@ -335,12 +371,13 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             sub_category_id,
             thumbnail_url,
             price,
-            level
+            level,
+            classmode.toUpperCase()
         ];
 
         const result = await client.query(query, values);
         
-        await client.query('COMMIT');  // Commit transaction
+        await client.query('COMMIT');
 
         res.status(201).json({ 
             success: true,
@@ -350,12 +387,17 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             }
         });
     } catch (error) {
-        await client.query('ROLLBACK');  // Rollback on error
-        console.error('Error creating course:', error);
+        await client.query('ROLLBACK');
+        console.error('Error creating course:', {
+            message: error.message,
+            stack: error.stack,
+            details: error.detail || 'No additional details'
+        });
         res.status(500).json({ 
             success: false,
             message: 'Failed to create course',
-            error: error.message 
+            error: error.message,
+            details: error.detail || 'No additional details'
         });
     } finally {
         client.release();
@@ -401,7 +443,8 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
                 e.enrolled_at,
                 e.status as enrollment_status,
                 pt.progress_status,
-                pt.last_accessed_at
+                pt.last_accessed_at,
+                c.classmode
             FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS} e
             JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
                 ON e.course_id = c.id

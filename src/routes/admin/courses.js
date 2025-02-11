@@ -186,6 +186,152 @@ router.delete('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res
     }
 });
 
+// Admin: Update course
+router.put('/:courseId/edit', verifyToken, requireRole(['ADMIN']), async (req, res) => {
+    const client = await masterPool.connect();
+    try {
+        const { courseId } = req.params;
+        console.log('Attempting to update course:', courseId);
+
+        await client.query('BEGIN');
+
+        const { 
+            title, 
+            description, 
+            instructor_id,
+            main_category_id,
+            sub_category_id,
+            thumbnail_url,
+            price,
+            level,
+            classmode,
+            zoom_link,
+            status
+        } = req.body;
+
+        // First check if the course exists
+        const checkResult = await client.query(`
+            SELECT classmode FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+            WHERE id = $1
+        `, [courseId]);
+
+        if (checkResult.rows.length === 0) {
+            throw new Error('Course not found');
+        }
+
+        // Validate classmode if it's being updated
+        if (classmode && !['ONLINE', 'VOD'].includes(classmode.toUpperCase())) {
+            throw new Error('Invalid classmode. Must be either ONLINE or VOD');
+        }
+
+        // If updating to ONLINE mode or already ONLINE, ensure zoom_link is provided
+        const isOrWillBeOnline = classmode ? classmode.toUpperCase() === 'ONLINE' : checkResult.rows[0].classmode === 'ONLINE';
+        if (isOrWillBeOnline && !zoom_link) {
+            throw new Error('zoom_link is required for ONLINE courses');
+        }
+
+        // Build update query dynamically based on provided fields
+        const updates = [];
+        const values = [courseId];
+        let paramCount = 2; // Starting from 2 as $1 is courseId
+
+        if (title) {
+            updates.push(`title = $${paramCount}`);
+            values.push(title);
+            paramCount++;
+        }
+        if (description) {
+            updates.push(`description = $${paramCount}`);
+            values.push(description);
+            paramCount++;
+        }
+        if (instructor_id) {
+            updates.push(`instructor_id = $${paramCount}`);
+            values.push(instructor_id);
+            paramCount++;
+        }
+        if (main_category_id) {
+            updates.push(`main_category_id = $${paramCount}`);
+            values.push(main_category_id);
+            paramCount++;
+        }
+        if (sub_category_id) {
+            updates.push(`sub_category_id = $${paramCount}`);
+            values.push(sub_category_id);
+            paramCount++;
+        }
+        if (thumbnail_url) {
+            updates.push(`thumbnail_url = $${paramCount}`);
+            values.push(thumbnail_url);
+            paramCount++;
+        }
+        if (price) {
+            updates.push(`price = $${paramCount}`);
+            values.push(price);
+            paramCount++;
+        }
+        if (level) {
+            updates.push(`level = $${paramCount}`);
+            values.push(level);
+            paramCount++;
+        }
+        if (classmode) {
+            updates.push(`classmode = $${paramCount}`);
+            values.push(classmode.toUpperCase());
+            paramCount++;
+        }
+        if (zoom_link !== undefined) { // Allow clearing zoom_link for VOD courses
+            updates.push(`zoom_link = $${paramCount}`);
+            values.push(zoom_link);
+            paramCount++;
+        }
+        if (status) {
+            updates.push(`status = $${paramCount}`);
+            values.push(status);
+            paramCount++;
+        }
+
+        // Add updated_at timestamp
+        updates.push(`updated_at = CURRENT_TIMESTAMP`);
+
+        if (updates.length === 0) {
+            throw new Error('No fields to update');
+        }
+
+        const updateQuery = `
+            UPDATE ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+            SET ${updates.join(', ')}
+            WHERE id = $1
+            RETURNING *
+        `;
+
+        console.log('Executing update query:', updateQuery);
+        console.log('With values:', values);
+
+        const result = await client.query(updateQuery, values);
+        
+        await client.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: 'Course updated successfully',
+            data: {
+                course: result.rows[0]
+            }
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error updating course:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update course',
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
 // Admin: Create week folder
 router.post('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
@@ -323,6 +469,62 @@ router.post('/:courseId/:weekNumber/upload', verifyToken, requireRole(['ADMIN'])
             message: 'Failed to generate upload URLs',
             error: error.message
         });
+    }
+});
+
+// Admin: Toggle course status (PUBLISHED <-> DRAFT)
+router.put('/:courseId/toggle-status', verifyToken, requireRole(['ADMIN']), async (req, res) => {
+    const client = await masterPool.connect();
+    try {
+        const { courseId } = req.params;
+        console.log('Attempting to toggle course status:', courseId);
+
+        await client.query('BEGIN');
+
+        // First check if the course exists and get current status
+        const checkResult = await client.query(`
+            SELECT status FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+            WHERE id = $1
+        `, [courseId]);
+
+        if (checkResult.rows.length === 0) {
+            throw new Error('Course not found');
+        }
+
+        // Toggle status
+        const currentStatus = checkResult.rows[0].status;
+        const newStatus = currentStatus === 'PUBLISHED' ? 'DRAFT' : 'PUBLISHED';
+
+        const updateQuery = `
+            UPDATE ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+            SET 
+                status = $2,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+            RETURNING *
+        `;
+
+        const result = await client.query(updateQuery, [courseId, newStatus]);
+        
+        await client.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: `Course status toggled from ${currentStatus} to ${newStatus}`,
+            data: {
+                course: result.rows[0]
+            }
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error toggling course status:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to toggle course status',
+            error: error.message
+        });
+    } finally {
+        client.release();
     }
 });
 

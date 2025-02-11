@@ -161,7 +161,7 @@ router.get('/', async (req, res) => {
 
 
 // Get specific course
-router.get('/:courseId', async (req, res) => {
+router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
         const { courseId } = req.params;
         const query = `
@@ -173,7 +173,8 @@ router.get('/:courseId', async (req, res) => {
                 sc.id as sub_category_id,
                 u.name as instructor_name,
                 u.cognito_user_id as instructor_id,
-                c.classmode
+                c.classmode,
+                c.zoom_link
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
             LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
                 ON c.main_category_id = mc.id
@@ -265,21 +266,9 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             thumbnail_url,
             price,
             level,
-            classmode
+            classmode,
+            zoom_link
         } = req.body;
-
-        // 각 필드 값 로깅
-        // console.log('Parsed fields:', {
-        //     title,
-        //     description,
-        //     instructor_id,
-        //     main_category_id,
-        //     sub_category_id,
-        //     thumbnail_url,
-        //     price,
-        //     level,
-        //     classmode
-        // });
 
         // Validate required fields
         if (!title || !description || !instructor_id || !main_category_id || !sub_category_id || !classmode) {
@@ -357,9 +346,10 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
                 thumbnail_url,
                 price,
                 level,
-                classmode
+                classmode,
+                zoom_link
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING *
         `;
 
@@ -372,7 +362,8 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             thumbnail_url,
             price,
             level,
-            classmode.toUpperCase()
+            classmode.toUpperCase(),
+            zoom_link
         ];
 
         const result = await client.query(query, values);
@@ -388,16 +379,11 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
         });
     } catch (error) {
         await client.query('ROLLBACK');
-        console.error('Error creating course:', {
-            message: error.message,
-            stack: error.stack,
-            details: error.detail || 'No additional details'
-        });
+        console.error('Error creating course:', error);
         res.status(500).json({ 
             success: false,
             message: 'Failed to create course',
-            error: error.message,
-            details: error.detail || 'No additional details'
+            error: error.message 
         });
     } finally {
         client.release();

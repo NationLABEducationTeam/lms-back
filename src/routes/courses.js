@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { verifyToken, requireRole } = require('../middlewares/auth');
 const { masterPool, getPool, SCHEMAS, TABLES } = require('../config/database');
-const { listCourseWeekMaterials } = require('../utils/s3');
+const { listCourseWeekMaterials, createEmptyFolder, createVodFolder } = require('../utils/s3');
 
 const TABLE_NAME = 'nationslab-courses';
 
@@ -290,18 +290,6 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             throw new Error('Invalid classmode. Must be either ONLINE or VOD');
         }
 
-        // console.log('Received course creation request:', {
-        //     title,
-        //     description,
-        //     instructor_id,
-        //     main_category_id,
-        //     sub_category_id,
-        //     thumbnail_url,
-        //     price,
-        //     level,
-        //     classmode
-        // });
-
         // Check if main category exists, if not create it
         let mainCategoryResult = await client.query(`
             SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES}
@@ -367,6 +355,15 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
         ];
 
         const result = await client.query(query, values);
+        
+        // Create course folder in S3
+        await createEmptyFolder(`${title}/`);
+
+        // If it's a VOD course, create a folder in vodcourseregistry bucket
+        if (classmode.toUpperCase() === 'VOD') {
+            const { englishTitle, folderPath } = await createVodFolder(title);
+            console.log('Created VOD folder:', folderPath);
+        }
         
         await client.query('COMMIT');
 

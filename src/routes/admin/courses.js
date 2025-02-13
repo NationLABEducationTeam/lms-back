@@ -2,7 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { verifyToken, requireRole } = require('../../middlewares/auth');
 const { masterPool, getPool, SCHEMAS, TABLES } = require('../../config/database');
-const { listCourseWeekMaterials, createEmptyFolder, generateUploadUrls } = require('../../utils/s3');
+const { 
+    listCourseWeekMaterials, 
+    createEmptyFolder, 
+    generateUploadUrls,
+    generateVodUploadUrls,
+    listVodFiles,
+    createVodFolder
+} = require('../../utils/s3');
 const { PutObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3Client } = require('../../config/s3');
@@ -417,9 +424,9 @@ router.post('/:courseId/:weekNumber/upload', verifyToken, requireRole(['ADMIN'])
             });
         }
 
-        // Get course title from database
+        // Get course title and classmode from database
         const query = `
-            SELECT title 
+            SELECT title, classmode
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
             WHERE id = $1
         `;
@@ -433,27 +440,28 @@ router.post('/:courseId/:weekNumber/upload', verifyToken, requireRole(['ADMIN'])
             });
         }
 
-        const courseTitle = result.rows[0].title;
-        console.log('Generating presigned URLs for course:', courseTitle, 'week:', weekNumber);
+        const { title, classmode } = result.rows[0];
+        console.log('Generating presigned URLs for course:', title, 'week:', weekNumber);
         
-        // 각 파일에 대한 presigned URL 생성
-        const presignedUrls = await Promise.all(
-            files.map(async (file) => {
-                const key = `${courseTitle}/${weekNumber}주차/${file.name}`;
-                const command = new PutObjectCommand({
-                    Bucket: 'nationslablmscoursebucket',
-                    Key: key,
-                    ContentType: file.type
-                });
-                
-                const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-                return {
-                    fileName: file.name,
-                    url,
-                    key
-                };
-            })
-        );
+        // VOD 영상 파일과 일반 파일 분리
+        const vodFiles = files.filter(file => file.type.startsWith('video/'));
+        const regularFiles = files.filter(file => !file.type.startsWith('video/'));
+        
+        let presignedUrls = [];
+
+        // VOD 영상 파일 처리 (VOD 강좌인 경우에만)
+        if (classmode === 'VOD' && vodFiles.length > 0) {
+            // 한글 제목을 영문으로 변환하여 VOD 폴더명 생성
+            const { englishTitle } = await createVodFolder(title);
+            const vodUrls = await generateVodUploadUrls(englishTitle, vodFiles);
+            presignedUrls.push(...vodUrls);
+        }
+
+        // 일반 파일 처리
+        if (regularFiles.length > 0) {
+            const regularUrls = await generateUploadUrls(title, weekNumber, regularFiles);
+            presignedUrls.push(...regularUrls);
+        }
 
         res.json({
             success: true,

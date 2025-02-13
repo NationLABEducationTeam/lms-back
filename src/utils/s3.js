@@ -1,5 +1,6 @@
 const { S3Client, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const { transliterate } = require('transliteration');
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION || 'ap-northeast-2'
@@ -125,17 +126,72 @@ async function createEmptyFolder(folderPath) {
 }
 
 /**
+ * 문자열에서 공백과 특수문자를 안전하게 처리합니다.
+ * @param {string} str - 처리할 문자열
+ * @returns {string} - 처리된 문자열
+ */
+function sanitizePathComponent(str) {
+    // 파일명과 확장자 분리
+    const lastDotIndex = str.lastIndexOf('.');
+    if (lastDotIndex === -1) {
+        // 확장자가 없는 경우
+        return str
+            .replace(/\s+/g, '-')        // 공백을 하이픈으로 변환
+            .replace(/[^a-zA-Z0-9가-힣-]/g, '') // 알파벳, 숫자, 한글, 하이픈만 허용
+            .replace(/-+/g, '-')         // 연속된 하이픈을 하나로
+            .replace(/^-+|-+$/g, '');    // 시작과 끝의 하이픈 제거
+    }
+
+    // 파일명과 확장자 따로 처리
+    const fileName = str.substring(0, lastDotIndex);
+    const extension = str.substring(lastDotIndex);
+    
+    return fileName
+        .replace(/\s+/g, '-')        // 공백을 하이픈으로 변환
+        .replace(/[^a-zA-Z0-9가-힣-]/g, '') // 알파벳, 숫자, 한글, 하이픈만 허용
+        .replace(/-+/g, '-')         // 연속된 하이픈을 하나로
+        .replace(/^-+|-+$/g, '')     // 시작과 끝의 하이픈 제거
+        + extension;                  // 확장자 그대로 추가
+}
+
+/**
  * 파일 업로드를 위한 presigned URL을 생성합니다.
  * @param {string} courseTitle - 강좌 제목
  * @param {number} weekNumber - 주차 번호
  * @param {Array<{name: string, type: string, size: number}>} files - 업로드할 파일 정보 배열
- * @returns {Promise<Array<{fileName: string, url: string}>>} - presigned URL 배열
+ * @returns {Promise<Array<{fileName: string, sanitizedFileName: string, url: string, key: string}>>} - presigned URL 배열
  */
 async function generateUploadUrls(courseTitle, weekNumber, files) {
     try {
+        console.log('=== generateUploadUrls called ===');
+        console.log('Request parameters:', {
+            courseTitle,
+            weekNumber,
+            files: files.map(f => ({
+                name: f.name,
+                type: f.type,
+                size: f.size
+            }))
+        });
+
         const presignedUrls = await Promise.all(
             files.map(async (file) => {
-                const key = `${courseTitle}/${weekNumber}주차/${file.name}`;
+                const sanitizedCourseTitle = sanitizePathComponent(courseTitle);
+                const sanitizedFileName = sanitizePathComponent(file.name);
+                const key = `${sanitizedCourseTitle}/${weekNumber}주차/${sanitizedFileName}`;
+                
+                console.log('Processing file:', {
+                    originalName: file.name,
+                    sanitizedName: sanitizedFileName,
+                    courseTitle: {
+                        original: courseTitle,
+                        sanitized: sanitizedCourseTitle
+                    },
+                    key: key,
+                    fileType: file.type,
+                    fileSize: file.size
+                });
+                
                 const command = new PutObjectCommand({
                     Bucket: 'nationslablmscoursebucket',
                     Key: key,
@@ -143,17 +199,181 @@ async function generateUploadUrls(courseTitle, weekNumber, files) {
                 });
                 
                 const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+                console.log('Generated presigned URL for file:', {
+                    key,
+                    urlLength: url.length,
+                    expiresIn: '1 hour'
+                });
+
                 return {
                     fileName: file.name,
+                    sanitizedFileName,
                     url,
                     key
                 };
             })
         );
 
+        console.log('=== generateUploadUrls completed ===');
+        console.log('Generated URLs count:', presignedUrls.length);
+        
         return presignedUrls;
     } catch (error) {
-        console.error('Error generating presigned URLs:', error);
+        console.error('=== Error in generateUploadUrls ===');
+        console.error('Error details:', {
+            message: error.message,
+            stack: error.stack,
+            code: error.code
+        });
+        console.error('Request parameters when error occurred:', {
+            courseTitle,
+            weekNumber,
+            filesCount: files?.length
+        });
+        throw error;
+    }
+}
+
+/**
+ * 한글 강좌명을 영문으로 변환하여 VOD 폴더를 생성합니다.
+ * @param {string} koreanTitle - 한글 강좌명
+ * @returns {Promise<{englishTitle: string, folderPath: string}>} - 생성된 영문 폴더명과 전체 경로
+ */
+async function createVodFolder(koreanTitle) {
+    try {
+        // 한글을 영문으로 변환하고 공백/특수문자 처리
+        let englishTitle = transliterate(koreanTitle)
+            .toLowerCase()
+            .replace(/\s+/g, '-')        // 공백을 하이픈으로 변환
+            .replace(/[^a-z0-9-]/g, '')  // 영문 소문자, 숫자, 하이픈만 허용
+            .replace(/-+/g, '-')         // 연속된 하이픈을 하나로
+            .replace(/^-+|-+$/g, '');    // 시작과 끝의 하이픈 제거
+
+        console.log('Title conversion:', {
+            original: koreanTitle,
+            converted: englishTitle
+        });
+
+        const folderPath = `vod/${englishTitle}/`;
+        
+        const command = new PutObjectCommand({
+            Bucket: 'vodcourseregistry',
+            Key: folderPath,
+            Body: ''
+        });
+
+        await s3Client.send(command);
+        console.log('Successfully created VOD folder:', folderPath);
+        
+        return {
+            englishTitle,
+            folderPath
+        };
+    } catch (error) {
+        console.error('Error creating VOD folder:', error);
+        throw error;
+    }
+}
+
+/**
+ * VOD 영상 파일 업로드를 위한 presigned URL을 생성합니다.
+ * @param {string} englishTitle - 영문 강좌명
+ * @param {Array<{name: string, type: string, size: number}>} files - 업로드할 VOD 파일 정보 배열
+ * @returns {Promise<Array<{fileName: string, sanitizedFileName: string, url: string, key: string}>>} - presigned URL 배열
+ */
+async function generateVodUploadUrls(englishTitle, files) {
+    try {
+        console.log('=== generateVodUploadUrls called ===');
+        console.log('Request parameters:', {
+            englishTitle,
+            files: files.map(f => ({
+                name: f.name,
+                type: f.type,
+                size: f.size
+            }))
+        });
+
+        const presignedUrls = await Promise.all(
+            files.map(async (file) => {
+                const sanitizedFileName = sanitizePathComponent(file.name);
+                const key = `vod/${englishTitle}/${sanitizedFileName}`;
+                
+                console.log('Processing VOD file:', {
+                    originalName: file.name,
+                    sanitizedName: sanitizedFileName,
+                    englishTitle,
+                    key: key,
+                    fileType: file.type,
+                    fileSize: file.size,
+                    bucket: 'vodcourseregistry'
+                });
+                
+                const command = new PutObjectCommand({
+                    Bucket: 'vodcourseregistry',
+                    Key: key,
+                    ContentType: file.type
+                });
+                
+                const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+                console.log('Generated presigned URL for VOD file:', {
+                    key,
+                    urlLength: url.length,
+                    expiresIn: '1 hour'
+                });
+
+                return {
+                    fileName: file.name,
+                    sanitizedFileName,
+                    url,
+                    key
+                };
+            })
+        );
+
+        console.log('=== generateVodUploadUrls completed ===');
+        console.log('Generated URLs count:', presignedUrls.length);
+        
+        return presignedUrls;
+    } catch (error) {
+        console.error('=== Error in generateVodUploadUrls ===');
+        console.error('Error details:', {
+            message: error.message,
+            stack: error.stack,
+            code: error.code
+        });
+        console.error('Request parameters when error occurred:', {
+            englishTitle,
+            filesCount: files?.length
+        });
+        throw error;
+    }
+}
+
+/**
+ * VOD 폴더의 영상 파일 목록을 조회합니다.
+ * @param {string} englishTitle - 영문 강좌명
+ * @returns {Promise<Array>} - VOD 파일 목록
+ */
+async function listVodFiles(englishTitle) {
+    try {
+        const command = new ListObjectsV2Command({
+            Bucket: 'vodcourseregistry',
+            Prefix: `vod/${englishTitle}/`
+        });
+
+        const response = await s3Client.send(command);
+        
+        return (response.Contents || [])
+            .filter(item => !item.Key.endsWith('/')) // 폴더 제외
+            .map(item => ({
+                key: item.Key,
+                fileName: item.Key.split('/').pop(),
+                lastModified: item.LastModified,
+                size: item.Size,
+                downloadUrl: `https://vodcourseregistry.s3.ap-northeast-2.amazonaws.com/${item.Key}`
+            }));
+    } catch (error) {
+        console.error('Error listing VOD files:', error);
         throw error;
     }
 }
@@ -161,5 +381,8 @@ async function generateUploadUrls(courseTitle, weekNumber, files) {
 module.exports = {
     listCourseWeekMaterials,
     createEmptyFolder,
-    generateUploadUrls
+    generateUploadUrls,
+    createVodFolder,
+    generateVodUploadUrls,
+    listVodFiles
 }; 

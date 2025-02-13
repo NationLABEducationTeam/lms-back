@@ -32,6 +32,7 @@
     "jwks-rsa": "^3.1.0",
     "morgan": "^1.10.0",
     "pg": "^8.13.1",
+    "transliteration": "^2.3.5",
     "winston": "^3.11.0"
   },
   "devDependencies": {

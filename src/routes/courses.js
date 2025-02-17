@@ -9,6 +9,8 @@ const {
     updateFileDownloadPermission,
     sanitizePathComponent 
 } = require('../utils/s3');
+const { HeadObjectCommand } = require('@aws-sdk/client-s3');
+const { s3Client } = require('../config/s3');
 
 const TABLE_NAME = 'nationslab-courses';
 
@@ -707,6 +709,39 @@ router.put('/:courseId/materials/:weekNumber/:fileName/permission', verifyToken,
             bucketName = 'nationslablmscoursebucket';
         }
 
+        console.log('Generated file path:', {
+            originalTitle: courseTitle,
+            sanitizedTitle: sanitizedCourseTitle,
+            originalFileName: fileName,
+            sanitizedFileName,
+            weekNumber,
+            key,
+            bucketName
+        });
+
+        // 파일 존재 여부 확인
+        try {
+            const command = new HeadObjectCommand({
+                Bucket: bucketName,
+                Key: key
+            });
+            await s3Client.send(command);
+        } catch (error) {
+            console.error('File not found:', {
+                bucket: bucketName,
+                key: key,
+                error: error.message
+            });
+            return res.status(404).json({
+                success: false,
+                message: 'File not found in S3',
+                details: {
+                    bucket: bucketName,
+                    key: key
+                }
+            });
+        }
+
         // S3 파일 다운로드 권한 업데이트
         await updateFileDownloadPermission(key, isDownloadable, bucketName);
 
@@ -718,7 +753,8 @@ router.put('/:courseId/materials/:weekNumber/:fileName/permission', verifyToken,
                 weekNumber,
                 fileName,
                 isDownloadable,
-                bucket: bucketName
+                bucket: bucketName,
+                key
             }
         });
     } catch (error) {

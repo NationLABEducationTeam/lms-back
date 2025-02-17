@@ -146,7 +146,7 @@ async function createEmptyFolder(folderPath) {
 }
 
 /**
- * 문자열에서 공백과 특수문자를 안전하게 처리합니다.
+ * 문자열에서 위험한 특수문자만 제거하고 나머지는 유지합니다.
  * @param {string} str - 처리할 문자열
  * @returns {string} - 처리된 문자열
  */
@@ -156,10 +156,8 @@ function sanitizePathComponent(str) {
     if (lastDotIndex === -1) {
         // 확장자가 없는 경우
         return str
-            .replace(/\s+/g, '-')        // 공백을 하이픈으로 변환
-            .replace(/[^a-zA-Z0-9가-힣-]/g, '') // 알파벳, 숫자, 한글, 하이픈만 허용
-            .replace(/-+/g, '-')         // 연속된 하이픈을 하나로
-            .replace(/^-+|-+$/g, '');    // 시작과 끝의 하이픈 제거
+            .replace(/[<>:"/\\|?*\x00-\x1F]/g, '') // 파일 시스템에서 사용할 수 없는 문자만 제거
+            .trim(); // 앞뒤 공백 제거
     }
 
     // 파일명과 확장자 따로 처리
@@ -167,10 +165,8 @@ function sanitizePathComponent(str) {
     const extension = str.substring(lastDotIndex);
     
     return fileName
-        .replace(/\s+/g, '-')        // 공백을 하이픈으로 변환
-        .replace(/[^a-zA-Z0-9가-힣-]/g, '') // 알파벳, 숫자, 한글, 하이픈만 허용
-        .replace(/-+/g, '-')         // 연속된 하이픈을 하나로
-        .replace(/^-+|-+$/g, '')     // 시작과 끝의 하이픈 제거
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '') // 파일 시스템에서 사용할 수 없는 문자만 제거
+        .trim() // 앞뒤 공백 제거
         + extension;                  // 확장자 그대로 추가
 }
 

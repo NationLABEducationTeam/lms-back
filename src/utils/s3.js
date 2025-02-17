@@ -1,4 +1,4 @@
-const { S3Client, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, ListObjectsV2Command, PutObjectCommand, CopyObjectCommand, HeadObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { transliterate } = require('transliteration');
 
@@ -59,15 +59,35 @@ async function listWeekFiles(weekPrefix) {
         const response = await s3Client.send(command);
         
         // Contents에는 파일 목록이 들어있습니다
-        return (response.Contents || [])
+        const files = await Promise.all((response.Contents || [])
             .filter(item => !item.Key.endsWith('/')) // 폴더 제외
-            .map(item => ({
-                key: item.Key,
-                fileName: item.Key.split('/').pop(),
-                lastModified: item.LastModified,
-                size: item.Size,
-                type: getFileType(item.Key)
+            .map(async item => {
+                const downloadable = await isFileDownloadable(item.Key);
+                let downloadUrl = null;
+
+                if (downloadable) {
+                    // 다운로드 가능한 경우에만 presigned URL 생성
+                    const fileName = item.Key.split('/').pop();
+                    const command = new GetObjectCommand({
+                        Bucket: 'nationslablmscoursebucket',
+                        Key: item.Key,
+                        ResponseContentDisposition: `attachment; filename="${encodeURIComponent(fileName)}"`
+                    });
+                    downloadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+                }
+
+                return {
+                    key: item.Key,
+                    fileName: item.Key.split('/').pop(),
+                    lastModified: item.LastModified,
+                    size: item.Size,
+                    type: getFileType(item.Key),
+                    downloadable,
+                    downloadUrl
+                };
             }));
+
+        return files;
     } catch (error) {
         console.error('Error listing week files:', error);
         throw error;
@@ -363,18 +383,132 @@ async function listVodFiles(englishTitle) {
 
         const response = await s3Client.send(command);
         
-        return (response.Contents || [])
+        const files = await Promise.all((response.Contents || [])
             .filter(item => !item.Key.endsWith('/')) // 폴더 제외
-            .map(item => ({
-                key: item.Key,
-                fileName: item.Key.split('/').pop(),
-                lastModified: item.LastModified,
-                size: item.Size,
-                downloadUrl: `https://vodcourseregistry.s3.ap-northeast-2.amazonaws.com/${item.Key}`
+            .map(async item => {
+                // VOD 파일(.m3u8, .ts)은 스트리밍용으로만 처리
+                const isStreamingFile = item.Key.endsWith('.m3u8') || item.Key.endsWith('.ts');
+                const downloadable = isStreamingFile ? false : await isFileDownloadable(item.Key);
+                let downloadUrl = null;
+
+                if (!isStreamingFile && downloadable) {
+                    // 스트리밍 파일이 아니고 다운로드 가능한 경우에만 presigned URL 생성
+                    const fileName = item.Key.split('/').pop();
+                    const command = new GetObjectCommand({
+                        Bucket: 'vodcourseregistry',
+                        Key: item.Key,
+                        ResponseContentDisposition: `attachment; filename="${encodeURIComponent(fileName)}"`
+                    });
+                    downloadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+                }
+
+                return {
+                    key: item.Key,
+                    fileName: item.Key.split('/').pop(),
+                    lastModified: item.LastModified,
+                    size: item.Size,
+                    type: getFileType(item.Key),
+                    downloadable,
+                    downloadUrl,
+                    isStreamingFile
+                };
             }));
+
+        return files;
     } catch (error) {
         console.error('Error listing VOD files:', error);
         throw error;
+    }
+}
+
+/**
+ * 파일의 다운로드 가능 여부를 변경합니다.
+ * @param {string} key - 파일 키
+ * @param {boolean} isDownloadable - 다운로드 가능 여부
+ * @param {string} bucketName - S3 버킷 이름
+ * @returns {Promise<void>}
+ */
+async function updateFileDownloadPermission(key, isDownloadable, bucketName = 'nationslablmscoursebucket') {
+    try {
+        // VOD 스트리밍 파일(.m3u8, .ts)은 다운로드 권한 관리에서 제외
+        if (key.endsWith('.m3u8') || key.endsWith('.ts')) {
+            console.log('Skipping download permission update for streaming file:', key);
+            return;
+        }
+
+        // CopySource를 URL 인코딩
+        const encodedCopySource = encodeURIComponent(`${bucketName}/${key}`);
+
+        // 기존 객체의 메타데이터를 복사하면서 downloadable 속성 업데이트
+        const copyCommand = new CopyObjectCommand({
+            Bucket: bucketName,
+            CopySource: encodedCopySource,
+            Key: key,
+            Metadata: {
+                downloadable: String(isDownloadable)
+            },
+            MetadataDirective: 'REPLACE'
+        });
+
+        await s3Client.send(copyCommand);
+        console.log('Successfully updated file download permission:', {
+            key,
+            isDownloadable,
+            bucket: bucketName
+        });
+    } catch (error) {
+        console.error('Error updating file download permission:', error);
+        throw error;
+    }
+}
+
+/**
+ * 파일의 다운로드 가능 여부를 확인합니다.
+ * @param {string} key - 파일 키
+ * @param {string} bucketName - S3 버킷 이름
+ * @returns {Promise<boolean>} - 다운로드 가능 여부
+ */
+async function isFileDownloadable(key, bucketName = 'nationslablmscoursebucket') {
+    try {
+        const command = new HeadObjectCommand({
+            Bucket: bucketName,
+            Key: key
+        });
+
+        const response = await s3Client.send(command);
+        return response.Metadata?.downloadable === 'true';
+    } catch (error) {
+        console.error('Error checking file download permission:', error);
+        return false;
+    }
+}
+
+/**
+ * 파일 다운로드를 위한 presigned URL을 생성합니다.
+ * @param {string} key - 파일 키
+ * @returns {Promise<string|null>} - presigned URL 또는 null (다운로드 불가능한 경우)
+ */
+async function generateDownloadUrl(key) {
+    try {
+        // 다운로드 가능 여부 확인
+        const downloadable = await isFileDownloadable(key);
+        if (!downloadable) {
+            console.log('File is not downloadable:', key);
+            return null;
+        }
+
+        const fileName = key.split('/').pop();
+        const command = new GetObjectCommand({
+            Bucket: 'nationslablmscoursebucket',
+            Key: key,
+            ResponseContentDisposition: `attachment; filename="${encodeURIComponent(fileName)}"`
+        });
+
+        const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+        return url;
+    } catch (error) {
+        console.error('Error generating download URL:', error);
+        return null;
     }
 }
 
@@ -384,5 +518,9 @@ module.exports = {
     generateUploadUrls,
     createVodFolder,
     generateVodUploadUrls,
-    listVodFiles
+    listVodFiles,
+    updateFileDownloadPermission,
+    isFileDownloadable,
+    generateDownloadUrl,
+    sanitizePathComponent
 }; 

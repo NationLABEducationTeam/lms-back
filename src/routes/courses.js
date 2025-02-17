@@ -2,7 +2,13 @@ const express = require('express');
 const router = express.Router();
 const { verifyToken, requireRole } = require('../middlewares/auth');
 const { masterPool, getPool, SCHEMAS, TABLES } = require('../config/database');
-const { listCourseWeekMaterials, createEmptyFolder, createVodFolder } = require('../utils/s3');
+const { 
+    listCourseWeekMaterials, 
+    createEmptyFolder, 
+    createVodFolder,
+    updateFileDownloadPermission,
+    sanitizePathComponent 
+} = require('../utils/s3');
 
 const TABLE_NAME = 'nationslab-courses';
 
@@ -466,9 +472,11 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
                         if (!acc[file.type]) {
                             acc[file.type] = [];
                         }
+                        // downloadable이 true인 경우에만 downloadUrl 제공
                         acc[file.type].push({
                             fileName: file.fileName,
-                            downloadUrl: `https://nationslablmscoursebucket.s3.ap-northeast-2.amazonaws.com/${file.key}`,
+                            downloadUrl: file.downloadable ? file.downloadUrl : null,
+                            downloadable: file.downloadable,
                             lastModified: file.lastModified,
                             size: file.size
                         });
@@ -626,6 +634,100 @@ router.get('/admin/enrollments/all', verifyToken, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to fetch student enrollments',
+            error: error.message
+        });
+    }
+});
+
+// Update file download permission (Admin only)
+router.put('/:courseId/materials/:weekNumber/:fileName/permission', verifyToken, requireRole(['ADMIN']), async (req, res) => {
+    try {
+        const { courseId, weekNumber, fileName } = req.params;
+        const { isDownloadable } = req.body;
+
+        console.log('Updating file permission:', {
+            courseId,
+            weekNumber,
+            fileName,
+            isDownloadable
+        });
+
+        // VOD 스트리밍 파일(.m3u8, .ts)은 다운로드 권한 변경 불가
+        if (fileName.endsWith('.m3u8') || fileName.endsWith('.ts')) {
+            return res.status(400).json({
+                success: false,
+                message: 'Streaming files (.m3u8, .ts) cannot have their download permissions modified as they are for streaming only'
+            });
+        }
+
+        if (typeof isDownloadable !== 'boolean') {
+            return res.status(400).json({
+                success: false,
+                message: 'isDownloadable must be a boolean value'
+            });
+        }
+
+        // 강좌 정보 조회
+        const courseQuery = `
+            SELECT title, classmode
+            FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+            WHERE id = $1
+        `;
+        const courseResult = await getPool('read').query(courseQuery, [courseId]);
+
+        if (courseResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Course not found'
+            });
+        }
+
+        const { title: courseTitle, classmode } = courseResult.rows[0];
+        console.log('Found course:', { courseTitle, classmode });
+
+        // 파일 경로 생성
+        const sanitizedCourseTitle = sanitizePathComponent(courseTitle);
+        const sanitizedFileName = sanitizePathComponent(fileName);
+        let key;
+        let bucketName;
+
+        if (classmode === 'VOD' && (fileName.endsWith('.m3u8') || fileName.endsWith('.ts'))) {
+            // VOD 파일인 경우
+            const englishTitle = transliterate(courseTitle)
+                .toLowerCase()
+                .replace(/\s+/g, '-')
+                .replace(/[^a-z0-9-]/g, '')
+                .replace(/-+/g, '-')
+                .replace(/^-+|-+$/g, '');
+            key = `vod/${englishTitle}/${sanitizedFileName}`;
+            bucketName = 'vodcourseregistry';
+        } else {
+            // 일반 강의 자료인 경우
+            key = `${sanitizedCourseTitle}/${weekNumber}주차/${sanitizedFileName}`;
+            bucketName = 'nationslablmscoursebucket';
+        }
+
+        // S3 파일 다운로드 권한 업데이트
+        await updateFileDownloadPermission(key, isDownloadable, bucketName);
+
+        res.json({
+            success: true,
+            message: `File download permission updated successfully`,
+            data: {
+                courseId,
+                weekNumber,
+                fileName,
+                isDownloadable,
+                bucket: bucketName
+            }
+        });
+    } catch (error) {
+        console.error('Error updating file download permission:', error, {
+            stack: error.stack
+        });
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update file download permission',
             error: error.message
         });
     }

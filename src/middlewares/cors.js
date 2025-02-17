@@ -22,6 +22,7 @@ const corsOptions = {
         maxAge: 600 // 10 minutes
     },
     production: {
+        // 
         origin: [
             'http://nationslab-lms.s3-website.ap-northeast-2.amazonaws.com',
             'http://localhost:3001',

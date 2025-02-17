@@ -14,7 +14,7 @@ const { PutObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3Client } = require('../../config/s3');
 
-// Admin: Get specific course with week materials
+// Admin: Get specific course with materials
 router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
         const { courseId } = req.params;
@@ -26,7 +26,9 @@ router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
                 sc.name as sub_category_name,
                 sc.id as sub_category_id,
                 u.name as instructor_name,
-                u.cognito_user_id as instructor_id
+                u.cognito_user_id as instructor_id,
+                c.classmode,
+                c.zoom_link
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
             LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
                 ON c.main_category_id = mc.id
@@ -46,8 +48,10 @@ router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
             });
         }
 
-        // S3에서 모든 주차 자료 조회
-        const coursePrefix = `${result.rows[0].title}/`;
+        const course = result.rows[0];
+
+        // S3에서 강좌 자료 조회
+        const coursePrefix = `${course.title}/`;
         console.log('Fetching materials for course:', coursePrefix);
         const weeklyMaterials = await listCourseWeekMaterials(coursePrefix);
         
@@ -67,9 +71,11 @@ router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
                     }
                     acc[file.type].push({
                         fileName: file.fileName,
-                        downloadUrl: `https://nationslablmscoursebucket.s3.ap-northeast-2.amazonaws.com/${file.key}`,
+                        downloadUrl: file.downloadUrl,
+                        downloadable: file.downloadable,
                         lastModified: file.lastModified,
-                        size: file.size
+                        size: file.size,
+                        type: file.type
                     });
                     return acc;
                 }, {})
@@ -78,15 +84,17 @@ router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
         res.json({
             success: true,
             data: {
-                course: result.rows[0],
-                weeks: weeks
+                course: {
+                    ...course,
+                    weeks
+                }
             }
         });
     } catch (error) {
-        console.error('Error fetching course:', error);
+        console.error('Error fetching course details:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch course',
+            message: 'Failed to fetch course details',
             error: error.message
         });
     }

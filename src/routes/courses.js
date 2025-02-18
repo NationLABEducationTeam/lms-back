@@ -9,8 +9,9 @@ const {
     updateFileDownloadPermission,
     sanitizePathComponent 
 } = require('../utils/s3');
-const { HeadObjectCommand } = require('@aws-sdk/client-s3');
+const { HeadObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 const { s3Client } = require('../config/s3');
+const { transliterate } = require('transliteration');
 
 const TABLE_NAME = 'nationslab-courses';
 
@@ -45,15 +46,9 @@ router.get('/public', async (req, res) => {
         const query = `
             SELECT 
                 c.*,
-                mc.name as main_category_name,
-                sc.name as sub_category_name,
                 u.name as instructor_name,
                 c.classmode
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
-                ON c.main_category_id = mc.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
-                ON c.sub_category_id = sc.id
             LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
                 ON c.instructor_id = u.cognito_user_id
             ORDER BY c.created_at DESC
@@ -84,18 +79,10 @@ router.get('/public/:courseId', async (req, res) => {
         const query = `
             SELECT 
                 c.*,
-                mc.name as main_category_name,
-                mc.id as main_category_id,
-                sc.name as sub_category_name,
-                sc.id as sub_category_id,
                 u.name as instructor_name,
                 u.cognito_user_id as instructor_id,
                 c.classmode
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
-                ON c.main_category_id = mc.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
-                ON c.sub_category_id = sc.id
             LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
                 ON c.instructor_id = u.cognito_user_id
             WHERE c.id = $1
@@ -133,14 +120,8 @@ router.get('/', async (req, res) => {
         const query = `
             SELECT 
                 c.*,
-                mc.name as main_category_name,
-                sc.name as sub_category_name,
                 u.name as instructor_name
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
-                ON c.main_category_id = mc.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
-                ON c.sub_category_id = sc.id
             LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
                 ON c.instructor_id = u.cognito_user_id
             ORDER BY c.created_at DESC
@@ -175,19 +156,11 @@ router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
         const query = `
             SELECT 
                 c.*,
-                mc.name as main_category_name,
-                mc.id as main_category_id,
-                sc.name as sub_category_name,
-                sc.id as sub_category_id,
                 u.name as instructor_name,
                 u.cognito_user_id as instructor_id,
                 c.classmode,
                 c.zoom_link
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
-                ON c.main_category_id = mc.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
-                ON c.sub_category_id = sc.id
             LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
                 ON c.instructor_id = u.cognito_user_id
             WHERE c.id = $1
@@ -261,9 +234,9 @@ router.get('/my/progress', verifyToken, requireRole(['STUDENT']), async (req, re
 router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     const client = await masterPool.connect();
     try {
-        await client.query('BEGIN');  // Start transaction
+        await client.query('BEGIN');
 
-        console.log('Request body:', req.body);  // 요청 바디 전체 로깅
+        console.log('Request body:', req.body);
 
         const { 
             title, 
@@ -288,53 +261,19 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
                 sub_category_id: !!sub_category_id,
                 classmode: !!classmode
             });
-            throw new Error('Missing required fields: title, description, instructor_id, main_category_id, sub_category_id, and classmode are required');
+            throw new Error('Missing required fields');
         }
 
         // Validate classmode
-        console.log('Validating classmode:', classmode);
         if (!['ONLINE', 'VOD'].includes(classmode.toUpperCase())) {
-            console.log('Invalid classmode value:', classmode);
             throw new Error('Invalid classmode. Must be either ONLINE or VOD');
         }
 
-        // Check if main category exists, if not create it
-        let mainCategoryResult = await client.query(`
-            SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES}
-            WHERE id = $1
-        `, [main_category_id]);
-
-        if (mainCategoryResult.rows.length === 0) {
-            console.log(`Creating new main category: ${main_category_id}`);
-            mainCategoryResult = await client.query(`
-                INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES}
-                (id, name)
-                VALUES ($1, $1)
-                RETURNING id
-            `, [main_category_id]);
-        }
-
-        // Check if sub category exists, if not create it
-        let subCategoryResult = await client.query(`
-            SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES}
-            WHERE id = $1 AND main_category_id = $2
-        `, [sub_category_id, main_category_id]);
-
-        if (subCategoryResult.rows.length === 0) {
-            console.log(`Creating new sub category: ${sub_category_id} under ${main_category_id}`);
-            subCategoryResult = await client.query(`
-                INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES}
-                (id, name, main_category_id)
-                VALUES ($1, $1, $2)
-                RETURNING id
-            `, [sub_category_id, main_category_id]);
-        }
-
-        // Create the course with classmode
+        // Create the course
         const query = `
             INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
             (
-                title, 
+                title,
                 description, 
                 instructor_id,
                 main_category_id,
@@ -343,11 +282,15 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
                 price,
                 level,
                 classmode,
-                zoom_link
+                zoom_link,
+                coursebucket
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING *
         `;
+
+        // 임시로 빈 값 설정 (나중에 업데이트)
+        const tempCoursebucket = 'nationslablmscoursebucket';
 
         const values = [
             title,
@@ -359,19 +302,26 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             price,
             level,
             classmode.toUpperCase(),
-            zoom_link
+            zoom_link,
+            tempCoursebucket
         ];
 
         const result = await client.query(query, values);
+        const courseId = result.rows[0].id;
         
-        // Create course folder in S3
-        await createEmptyFolder(`${title}/`);
-
-        // If it's a VOD course, create a folder in vodcourseregistry bucket
-        if (classmode.toUpperCase() === 'VOD') {
-            const { englishTitle, folderPath } = await createVodFolder(title);
-            console.log('Created VOD folder:', folderPath);
-        }
+        // 이제 courseId를 알았으니 실제 폴더 경로 생성
+        const folderPath = classmode.toUpperCase() === 'VOD' ? `vod/${courseId}/` : `${courseId}/`;
+        
+        // coursebucket 업데이트
+        const updateQuery = `
+            UPDATE ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+            SET coursebucket = $1
+            WHERE id = $2
+        `;
+        await client.query(updateQuery, [`nationslablmscoursebucket/${folderPath}`, courseId]);
+        
+        // S3에 폴더 생성
+        await createEmptyFolder(folderPath);
         
         await client.query('COMMIT');
 
@@ -395,6 +345,8 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     }
 });
 
+
+// 강의 수정 기능
 router.put('/:courseId', verifyToken, requireRole(['INSTRUCTOR', 'ADMIN']), async (req, res) => {
     try {
         const { courseId } = req.params;
@@ -412,7 +364,7 @@ router.put('/:courseId', verifyToken, requireRole(['INSTRUCTOR', 'ADMIN']), asyn
     }
 });
 
-// Get enrolled courses for a student - Using Read Replica
+// Get enrolled courses for a student
 router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
     try {
         const { studentId } = req.params;
@@ -428,8 +380,6 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
         const query = `
             SELECT 
                 c.*,
-                mc.name as main_category_name,
-                sc.name as sub_category_name,
                 u.name as instructor_name,
                 e.enrolled_at,
                 e.status as enrollment_status,
@@ -439,10 +389,6 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
             FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS} e
             JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
                 ON e.course_id = c.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
-                ON c.main_category_id = mc.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
-                ON c.sub_category_id = sc.id
             LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
                 ON c.instructor_id = u.cognito_user_id
             LEFT JOIN ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.PROGRESS_TRACKING} pt
@@ -455,10 +401,10 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
 
         // S3에서 각 강좌의 주차 자료 조회
         const coursesWithMaterials = await Promise.all(result.rows.map(async (course) => {
-            // courseId 대신 강좌 제목을 prefix로 사용
-            const coursePrefix = `${course.title}/`;
+            // courseId를 prefix로 사용
+            const coursePrefix = `${course.id}/`;
             console.log('Fetching materials for course:', coursePrefix);  // 디버깅용
-            const weeklyMaterials = await listCourseWeekMaterials(coursePrefix);
+            const weeklyMaterials = await listCourseWeekMaterials(coursePrefix, 'STUDENT');
             
             // 주차별 데이터를 정렬하여 배열로 변환
             const weeks = Object.entries(weeklyMaterials)
@@ -474,13 +420,15 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
                         if (!acc[file.type]) {
                             acc[file.type] = [];
                         }
-                        // downloadable이 true인 경우에만 downloadUrl 제공
                         acc[file.type].push({
                             fileName: file.fileName,
-                            downloadUrl: file.downloadable ? file.downloadUrl : null,
+                            downloadUrl: file.downloadUrl,
+                            streamingUrl: file.streamingUrl,  // 스트리밍 URL 추가
                             downloadable: file.downloadable,
                             lastModified: file.lastModified,
-                            size: file.size
+                            size: file.size,
+                            type: file.type,
+                            isHlsFile: file.isHlsFile
                         });
                         return acc;
                     }, {})
@@ -536,17 +484,13 @@ router.get('/:courseId/students', verifyToken, async (req, res) => {
                 pt.completion_date,
                 c.title as course_title,
                 c.description as course_description,
-                mc.name as main_category_name,
-                sc.name as sub_category_name
+                c.main_category_id,
+                c.sub_category_id
             FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS} e
             JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
                 ON e.student_id = u.cognito_user_id
             JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c 
                 ON e.course_id = c.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
-                ON c.main_category_id = mc.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
-                ON c.sub_category_id = sc.id
             LEFT JOIN ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.PROGRESS_TRACKING} pt
                 ON e.id = pt.enrollment_id
             WHERE e.course_id = $1
@@ -599,8 +543,8 @@ router.get('/admin/enrollments/all', verifyToken, async (req, res) => {
                         'progress_status', pt.progress_status,
                         'last_accessed_at', pt.last_accessed_at,
                         'completion_date', pt.completion_date,
-                        'main_category', mc.name,
-                        'sub_category', sc.name
+                        'main_category_id', c.main_category_id,
+                        'sub_category_id', c.sub_category_id
                     ) ORDER BY e.enrolled_at DESC
                 ) as enrolled_courses
             FROM ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u
@@ -608,10 +552,6 @@ router.get('/admin/enrollments/all', verifyToken, async (req, res) => {
                 ON u.cognito_user_id = e.student_id
             LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
                 ON e.course_id = c.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc
-                ON c.main_category_id = mc.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc
-                ON c.sub_category_id = sc.id
             LEFT JOIN ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.PROGRESS_TRACKING} pt
                 ON e.id = pt.enrollment_id
             WHERE u.role = 'STUDENT'
@@ -654,14 +594,6 @@ router.put('/:courseId/materials/:weekNumber/:fileName/permission', verifyToken,
             isDownloadable
         });
 
-        // VOD 스트리밍 파일(.m3u8, .ts)은 다운로드 권한 변경 불가
-        if (fileName.endsWith('.m3u8') || fileName.endsWith('.ts')) {
-            return res.status(400).json({
-                success: false,
-                message: 'Streaming files (.m3u8, .ts) cannot have their download permissions modified as they are for streaming only'
-            });
-        }
-
         if (typeof isDownloadable !== 'boolean') {
             return res.status(400).json({
                 success: false,
@@ -671,7 +603,7 @@ router.put('/:courseId/materials/:weekNumber/:fileName/permission', verifyToken,
 
         // 강좌 정보 조회
         const courseQuery = `
-            SELECT title, classmode
+            SELECT id, classmode
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
             WHERE id = $1
         `;
@@ -684,34 +616,51 @@ router.put('/:courseId/materials/:weekNumber/:fileName/permission', verifyToken,
             });
         }
 
-        const { title: courseTitle, classmode } = courseResult.rows[0];
-        console.log('Found course:', { courseTitle, classmode });
+        const { classmode } = courseResult.rows[0];
+        console.log('Found course:', { courseId, classmode });
 
         // 파일 경로 생성
-        const sanitizedCourseTitle = sanitizePathComponent(courseTitle);
         const sanitizedFileName = sanitizePathComponent(fileName);
         let key;
-        let bucketName;
+        let bucketName = 'nationslablmscoursebucket';  // 모든 파일이 같은 버킷 사용
 
-        if (classmode === 'VOD' && (fileName.endsWith('.m3u8') || fileName.endsWith('.ts'))) {
-            // VOD 파일인 경우
-            const englishTitle = transliterate(courseTitle)
-                .toLowerCase()
-                .replace(/\s+/g, '-')
-                .replace(/[^a-z0-9-]/g, '')
-                .replace(/-+/g, '-')
-                .replace(/^-+|-+$/g, '');
-            key = `vod/${englishTitle}/${sanitizedFileName}`;
-            bucketName = 'vodcourseregistry';
-        } else {
-            // 일반 강의 자료인 경우
-            key = `${sanitizedCourseTitle}/${weekNumber}주차/${sanitizedFileName}`;
-            bucketName = 'nationslablmscoursebucket';
+        // VOD 파일인 경우도 주차별로 구조화
+        key = `${courseId}/${weekNumber}주차/${sanitizedFileName}`;
+
+        // .m3u8 파일인 경우, 관련된 .ts 파일들도 함께 권한 변경
+        if (fileName.endsWith('.m3u8')) {
+            try {
+                // 같은 디렉토리의 모든 .ts 파일 리스트 조회
+                const command = new ListObjectsV2Command({
+                    Bucket: bucketName,
+                    Prefix: `${courseId}/${weekNumber}주차/`,
+                    Delimiter: '/'
+                });
+                
+                const response = await s3Client.send(command);
+                const tsFiles = (response.Contents || [])
+                    .filter(item => item.Key.endsWith('.ts'))
+                    .map(item => item.Key);
+
+                // 모든 .ts 파일의 권한도 함께 업데이트
+                for (const tsKey of tsFiles) {
+                    await updateFileDownloadPermission(tsKey, isDownloadable, bucketName);
+                }
+
+                console.log('Updated permissions for TS files:', tsFiles);
+            } catch (error) {
+                console.error('Error updating TS files permissions:', error);
+            }
+        } else if (fileName.endsWith('.ts')) {
+            // .ts 파일은 개별적으로 권한을 변경할 수 없음
+            return res.status(400).json({
+                success: false,
+                message: 'TS files permissions can only be modified through their parent M3U8 file'
+            });
         }
 
         console.log('Generated file path:', {
-            originalTitle: courseTitle,
-            sanitizedTitle: sanitizedCourseTitle,
+            courseId,
             originalFileName: fileName,
             sanitizedFileName,
             weekNumber,
@@ -768,5 +717,32 @@ router.put('/:courseId/materials/:weekNumber/:fileName/permission', verifyToken,
         });
     }
 });
+
+// 파일 타입 매핑 함수 수정
+function getFileType(fileName) {
+    const extension = fileName.split('.').pop().toLowerCase();
+    const typeMap = {
+        pdf: 'document',
+        doc: 'document',
+        docx: 'document',
+        ppt: 'presentation',
+        pptx: 'presentation',
+        xls: 'spreadsheet',
+        xlsx: 'spreadsheet',
+        txt: 'text',
+        json: 'json',
+        jpg: 'image',
+        jpeg: 'image',
+        png: 'image',
+        gif: 'image',
+        mp4: 'video',
+        m3u8: 'video',  // m3u8 파일을 video 타입으로 처리
+        ts: 'video',    // ts 파일도 video 타입으로 처리
+        mp3: 'audio',
+        zip: 'archive',
+        rar: 'archive'
+    };
+    return typeMap[extension] || 'unknown';
+}
 
 module.exports = router; 

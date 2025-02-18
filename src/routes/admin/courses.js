@@ -21,19 +21,11 @@ router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
         const query = `
             SELECT 
                 c.*,
-                mc.name as main_category_name,
-                mc.id as main_category_id,
-                sc.name as sub_category_name,
-                sc.id as sub_category_id,
                 u.name as instructor_name,
                 u.cognito_user_id as instructor_id,
                 c.classmode,
                 c.zoom_link
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
-                ON c.main_category_id = mc.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
-                ON c.sub_category_id = sc.id
             LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
                 ON c.instructor_id = u.cognito_user_id
             WHERE c.id = $1
@@ -51,9 +43,9 @@ router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
         const course = result.rows[0];
 
         // S3에서 강좌 자료 조회
-        const coursePrefix = `${course.title}/`;
+        const coursePrefix = `${course.id}/`;
         console.log('Fetching materials for course:', coursePrefix);
-        const weeklyMaterials = await listCourseWeekMaterials(coursePrefix);
+        const weeklyMaterials = await listCourseWeekMaterials(coursePrefix, 'ADMIN');
         
         // 주차별 데이터를 정렬하여 배열로 변환
         const weeks = Object.entries(weeklyMaterials)
@@ -75,7 +67,9 @@ router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
                         downloadable: file.downloadable,
                         lastModified: file.lastModified,
                         size: file.size,
-                        type: file.type
+                        type: file.type,
+                        isHlsFile: file.isHlsFile,
+                        baseFileName: file.baseFileName
                     });
                     return acc;
                 }, {})
@@ -107,14 +101,8 @@ router.get('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
         const query = `
             SELECT 
                 c.*,
-                mc.name as main_category_name,
-                sc.name as sub_category_name,
                 u.name as instructor_name
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.MAIN_CATEGORIES} mc 
-                ON c.main_category_id = mc.id
-            LEFT JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.SUB_CATEGORIES} sc 
-                ON c.sub_category_id = sc.id
             LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
                 ON c.instructor_id = u.cognito_user_id
             ORDER BY c.created_at DESC
@@ -202,7 +190,7 @@ router.delete('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res
 });
 
 // Admin: Update course
-router.put('/:courseId/edit', verifyToken, requireRole(['ADMIN']), async (req, res) => {
+router.put('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     const client = await masterPool.connect();
     try {
         const { courseId } = req.params;
@@ -360,9 +348,9 @@ router.post('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) 
             });
         }
 
-        // Get course title from database
+        // Get course id from database
         const query = `
-            SELECT title 
+            SELECT id 
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
             WHERE id = $1
         `;
@@ -376,8 +364,7 @@ router.post('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) 
             });
         }
 
-        const courseTitle = result.rows[0].title;
-        const folderPath = `${courseTitle}/${weekNumber}주차/`;
+        const folderPath = `${courseId}/${weekNumber}주차/`;
         
         console.log('Creating folder:', folderPath);
         await createEmptyFolder(folderPath);
@@ -415,26 +402,9 @@ router.post('/:courseId/:weekNumber/upload', verifyToken, requireRole(['ADMIN'])
             });
         }
 
-        // Validate file information
-        const isValidFiles = files.every(file => 
-            file.name && 
-            typeof file.name === 'string' && 
-            file.type && 
-            typeof file.type === 'string' &&
-            file.size && 
-            typeof file.size === 'number'
-        );
-
-        if (!isValidFiles) {
-            return res.status(400).json({
-                success: false,
-                message: 'Each file must have name (string), type (string), and size (number)'
-            });
-        }
-
-        // Get course title and classmode from database
+        // Get course id and classmode from database
         const query = `
-            SELECT title, classmode
+            SELECT id, classmode
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
             WHERE id = $1
         `;
@@ -448,28 +418,14 @@ router.post('/:courseId/:weekNumber/upload', verifyToken, requireRole(['ADMIN'])
             });
         }
 
-        const { title, classmode } = result.rows[0];
-        console.log('Generating presigned URLs for course:', title, 'week:', weekNumber);
+        console.log('Generating presigned URLs for course:', {
+            courseId,
+            weekNumber,
+            files
+        });
         
-        // VOD 영상 파일과 일반 파일 분리
-        const vodFiles = files.filter(file => file.type.startsWith('video/'));
-        const regularFiles = files.filter(file => !file.type.startsWith('video/'));
-        
-        let presignedUrls = [];
-
-        // VOD 영상 파일 처리 (VOD 강좌인 경우에만)
-        if (classmode === 'VOD' && vodFiles.length > 0) {
-            // 한글 제목을 영문으로 변환하여 VOD 폴더명 생성
-            const { englishTitle } = await createVodFolder(title);
-            const vodUrls = await generateVodUploadUrls(englishTitle, vodFiles);
-            presignedUrls.push(...vodUrls);
-        }
-
-        // 일반 파일 처리
-        if (regularFiles.length > 0) {
-            const regularUrls = await generateUploadUrls(title, weekNumber, regularFiles);
-            presignedUrls.push(...regularUrls);
-        }
+        // 모든 파일을 일반 업로드로 처리
+        const presignedUrls = await generateUploadUrls(courseId, weekNumber, files);
 
         res.json({
             success: true,
@@ -541,6 +497,90 @@ router.put('/:courseId/toggle-status', verifyToken, requireRole(['ADMIN']), asyn
         });
     } finally {
         client.release();
+    }
+});
+
+// Admin: Create course
+router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
+    try {
+        const { 
+            title,
+            description,
+            instructor_id,
+            main_category_id,
+            sub_category_id,
+            thumbnail_url,
+            price,
+            level,
+            classmode,
+            zoom_link
+        } = req.body;
+
+        // Create the course
+        const query = `
+            INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+            (
+                title,
+                description, 
+                instructor_id,
+                main_category_id,
+                sub_category_id,
+                thumbnail_url,
+                price,
+                level,
+                classmode,
+                zoom_link,
+                coursebucket
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING *
+        `;
+
+        // 임시로 빈 값 설정 (나중에 업데이트)
+        const tempCoursebucket = 'nationslablmscoursebucket';
+
+        const values = [
+            title,
+            description,
+            instructor_id,
+            main_category_id,
+            sub_category_id,
+            thumbnail_url,
+            price,
+            level,
+            classmode.toUpperCase(),
+            zoom_link,
+            tempCoursebucket
+        ];
+
+        const result = await getPool('read').query(query, values);
+        const courseId = result.rows[0].id;
+        
+        // 이제 courseId를 알았으니 실제 폴더 경로 생성
+        const folderPath = classmode.toUpperCase() === 'VOD' ? `vod/${courseId}/` : `${courseId}/`;
+        
+        // coursebucket 업데이트
+        const updateQuery = `
+            UPDATE ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+            SET coursebucket = $1
+            WHERE id = $2
+        `;
+        await getPool('read').query(updateQuery, [`nationslablmscoursebucket/${folderPath}`, courseId]);
+
+        res.json({
+            success: true,
+            message: 'Course created successfully',
+            data: {
+                course: result.rows[0]
+            }
+        });
+    } catch (error) {
+        console.error('Error creating course:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create course',
+            error: error.message
+        });
     }
 });
 

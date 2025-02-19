@@ -530,10 +530,10 @@ async function updateFileDownloadPermission(key, isDownloadable, bucketName = 'n
                 });
 
                 await s3Client.send(relatedCopyCommand);
-                console.log('Updated permission for related file:', {
-                    key: fileKey,
-                    isDownloadable
-                });
+                // console.log('Updated permission for related file:', {
+                //     key: fileKey,
+                //     isDownloadable
+                // });
             }
         }
     } catch (error) {

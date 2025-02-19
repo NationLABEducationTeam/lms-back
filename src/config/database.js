@@ -45,35 +45,23 @@ const TABLES = {
 };
 
 const isProduction = process.env.NODE_ENV === 'production';
-const useReadReplica = process.env.USE_READ_REPLICA === 'true' || isProduction;
 console.log(chalk.blue('🔧 Environment:'), isProduction ? 'production' : 'development');
-console.log(chalk.blue('🔧 Using Read Replica:'), useReadReplica ? 'yes' : 'no');
 
 // Debug database configuration
-console.log(chalk.blue('🔧 Database Configuration:'), {
-    host: process.env.DB_HOST || 'lmsrds.cjik2cuykhtl.ap-northeast-2.rds.amazonaws.com',
-    port: process.env.DB_PORT || 5432,
-    database: 'postgres',
-    user: process.env.DB_USER || 'postgres',
-    ssl: { rejectUnauthorized: false },
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
-});
-
-if (useReadReplica) {
-    console.log(chalk.blue('🔧 Read Replica Configuration:'), {
-        host: process.env.READ_REPLICA_HOST || 'readreplicards.cjik2cuykhtl.ap-northeast-2.rds.amazonaws.com',
-        port: process.env.READ_REPLICA_PORT || 5432,
-        database: 'postgres',
-        user: process.env.DB_USER || 'postgres',
-        ssl: { rejectUnauthorized: false },
-    });
-}
+// console.log(chalk.blue('🔧 Database Configuration:'), {
+//     host: process.env.DB_HOST || 'lmsrds.cjik2cuykhtl.ap-northeast-2.rds.amazonaws.com',
+//     port: process.env.DB_PORT || 5432,
+//     database: 'postgres',
+//     user: process.env.DB_USER || 'postgres',
+//     ssl: { rejectUnauthorized: false },
+//     max: 20,
+//     idleTimeoutMillis: 30000,
+//     connectionTimeoutMillis: 2000,
+// });
 
 // Add password check (without revealing the actual password)
 const dbPassword = process.env.DB_PASSWORD ? String(process.env.DB_PASSWORD) : 'your_password_here';
-console.log('DB_PASSWORD environment variable is', process.env.DB_PASSWORD ? 'set' : 'not set');
+// console.log('DB_PASSWORD environment variable is', process.env.DB_PASSWORD ? 'set' : 'not set');
 
 // Master pool for write operations
 const masterPool = new Pool({
@@ -82,35 +70,19 @@ const masterPool = new Pool({
     database: 'postgres',
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD,
-    max: 20,
+    max: 50,
+    min: 10,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+    connectionTimeoutMillis: 3000,
+    acquireTimeoutMillis: 8000,
+    maxUses: 7500,
+    statement_timeout: 10000,
     ssl: { rejectUnauthorized: false }
 });
 
-// Read replica pool configuration
-const replicaPool = useReadReplica
-    ? new Pool({
-        host: process.env.READ_REPLICA_HOST || 'readreplicards.cjik2cuykhtl.ap-northeast-2.rds.amazonaws.com',
-        port: process.env.READ_REPLICA_PORT || 5432,
-        database: 'postgres',
-        user: process.env.DB_USER || 'postgres',
-        password: process.env.DB_PASSWORD,
-        max: 20,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 2000,
-        ssl: { rejectUnauthorized: false }
-    })
-    : masterPool;
-
 // Function to get appropriate pool based on operation type
 const getPool = (operation = 'read') => {
-    if (operation === 'write' || !useReadReplica) {
-        console.log(chalk.blue('🔄 Using master pool for operation:'), operation);
-        return masterPool;
-    }
-    console.log(chalk.blue('🔄 Using replica pool for operation:'), operation);
-    return replicaPool;
+    return masterPool;
 };
 
 // Test the connection
@@ -121,16 +93,6 @@ masterPool.on('connect', () => {
 masterPool.on('error', (err) => {
     console.error(chalk.red('❌ Master pool error:'), err);
 });
-
-if (useReadReplica) {
-    replicaPool.on('connect', () => {
-        console.log(chalk.green('✅ Connected to PostgreSQL read replica'));
-    });
-
-    replicaPool.on('error', (err) => {
-        console.error(chalk.red('❌ Replica pool error:'), err);
-    });
-}
 
 // Test connection function with more detailed error logging
 const testConnection = async () => {
@@ -167,9 +129,28 @@ testConnection()
         console.error(chalk.red('❌ Unexpected error during initial connection test:'), err);
     });
 
+// 풀 상태 모니터링
+const monitorPool = (pool, poolName) => {
+    setInterval(() => {
+        console.log(chalk.blue(`📊 ${poolName} Pool Stats:`));
+        console.log(chalk.blue(`- Total: ${pool.totalCount}`));
+        console.log(chalk.blue(`- Idle: ${pool.idleCount}`));
+        console.log(chalk.blue(`- Waiting: ${pool.waitingCount}`));
+    }, 60000); // 1분마다 체크
+};
+
+// 모니터링 시작
+monitorPool(masterPool, 'Master');
+
+// 연결 한계 도달 시 경고
+masterPool.on('connect', (client) => {
+    if (masterPool.totalCount >= 45) {  // 90% 임계값
+        console.warn(chalk.yellow('⚠️ Database pool nearing capacity'));
+    }
+});
+
 module.exports = {
     masterPool,
-    replicaPool,
     getPool,
     testConnection,
     SCHEMAS,

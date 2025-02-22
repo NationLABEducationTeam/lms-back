@@ -25,6 +25,7 @@ const aiRouter = require('./src/routes/ai');
 const usersRouter = require('./src/routes/users');
 const enrollmentsRouter = require('./src/routes/enrollments');
 const authRoutes = require('./src/routes/auth');
+const timemarksRouter = require('./src/routes/timemarks');
 
 const app = express();
 
@@ -116,6 +117,7 @@ app.use(`${API_PREFIX}/ai`, aiRouter);
 app.use(`${API_PREFIX}/users`, usersRouter);
 app.use(`${API_PREFIX}/enrollments`, enrollmentsRouter);
 app.use(`${API_PREFIX}/admin/courses`, require('./src/routes/admin/courses'));
+app.use(`${API_PREFIX}/timemarks`, timemarksRouter);
 app.use('/auth', authRoutes);
 
 // Handle 404 errors

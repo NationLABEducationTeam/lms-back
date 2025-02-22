@@ -13,6 +13,13 @@ const { v4: uuidv4 } = require('uuid');
  */
 const createTimemark = async (params) => {
     const { userId, courseId, videoId, timestamp, content } = params;
+    console.log('📝 [DynamoDB] 타임마크 생성 시작:', {
+        userId,
+        courseId,
+        videoId,
+        timestamp
+    });
+
     const now = new Date().toISOString();
     const id = uuidv4();
 
@@ -27,15 +34,24 @@ const createTimemark = async (params) => {
         updatedAt: now
     };
 
-    await dynamodb.put({
-        TableName: 'LMSVOD_TimeMarks',
-        Item: item
-    });
+    try {
+        await dynamodb.put({
+            TableName: 'LMSVOD_TimeMarks',
+            Item: item
+        });
+        console.log('✅ [DynamoDB] 타임마크 생성 완료:', { id });
 
-    return {
-        ...item,
-        formattedTime: formatTime(timestamp)
-    };
+        return {
+            ...item,
+            formattedTime: formatTime(timestamp)
+        };
+    } catch (error) {
+        console.error('❌ [DynamoDB] 타임마크 생성 오류:', {
+            error: error.message,
+            params: item
+        });
+        throw error;
+    }
 };
 
 /**
@@ -45,6 +61,11 @@ const createTimemark = async (params) => {
  * @returns {Promise<Array>} 타임마크 목록
  */
 const getTimemarks = async (courseId, videoId) => {
+    console.log('🔍 [DynamoDB] 타임마크 목록 조회 시작:', {
+        courseId,
+        videoId
+    });
+
     const params = {
         TableName: 'LMSVOD_TimeMarks',
         FilterExpression: 'courseId = :courseId AND videoId = :videoId',
@@ -54,11 +75,25 @@ const getTimemarks = async (courseId, videoId) => {
         }
     };
 
-    const result = await dynamodb.scan(params);
-    return result.Items.map(item => ({
-        ...item,
-        formattedTime: formatTime(parseInt(item.timestamp))
-    }));
+    try {
+        const result = await dynamodb.scan(params);
+        const timemarks = result.Items.map(item => ({
+            ...item,
+            formattedTime: formatTime(parseInt(item.timestamp))
+        }));
+
+        console.log('✅ [DynamoDB] 타임마크 목록 조회 완료:', {
+            count: timemarks.length
+        });
+
+        return timemarks;
+    } catch (error) {
+        console.error('❌ [DynamoDB] 타임마크 목록 조회 오류:', {
+            error: error.message,
+            params
+        });
+        throw error;
+    }
 };
 
 /**
@@ -69,8 +104,12 @@ const getTimemarks = async (courseId, videoId) => {
  * @returns {Promise<Object>} 수정된 타임마크 정보
  */
 const updateTimemark = async (id, timestamp, content) => {
-    const now = new Date().toISOString();
+    console.log('📝 [DynamoDB] 타임마크 수정 시작:', {
+        id,
+        timestamp
+    });
 
+    const now = new Date().toISOString();
     const params = {
         TableName: 'LMSVOD_TimeMarks',
         Key: {
@@ -85,11 +124,21 @@ const updateTimemark = async (id, timestamp, content) => {
         ReturnValues: 'ALL_NEW'
     };
 
-    const result = await dynamodb.update(params);
-    return {
-        ...result.Attributes,
-        formattedTime: formatTime(parseInt(timestamp))
-    };
+    try {
+        const result = await dynamodb.update(params);
+        console.log('✅ [DynamoDB] 타임마크 수정 완료');
+
+        return {
+            ...result.Attributes,
+            formattedTime: formatTime(parseInt(timestamp))
+        };
+    } catch (error) {
+        console.error('❌ [DynamoDB] 타임마크 수정 오류:', {
+            error: error.message,
+            params
+        });
+        throw error;
+    }
 };
 
 /**
@@ -99,6 +148,11 @@ const updateTimemark = async (id, timestamp, content) => {
  * @returns {Promise<void>}
  */
 const deleteTimemark = async (id, timestamp) => {
+    console.log('🗑️ [DynamoDB] 타임마크 삭제 시작:', {
+        id,
+        timestamp
+    });
+
     const params = {
         TableName: 'LMSVOD_TimeMarks',
         Key: {
@@ -107,7 +161,16 @@ const deleteTimemark = async (id, timestamp) => {
         }
     };
 
-    await dynamodb.delete(params);
+    try {
+        await dynamodb.delete(params);
+        console.log('✅ [DynamoDB] 타임마크 삭제 완료');
+    } catch (error) {
+        console.error('❌ [DynamoDB] 타임마크 삭제 오류:', {
+            error: error.message,
+            params
+        });
+        throw error;
+    }
 };
 
 /**

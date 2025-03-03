@@ -4,10 +4,7 @@ const { verifyToken, requireRole } = require('../middlewares/auth');
 const { masterPool, getPool, SCHEMAS, TABLES } = require('../config/database');
 const { 
     listCourseWeekMaterials, 
-    createEmptyFolder, 
-    createVodFolder,
-    updateFileDownloadPermission,
-    sanitizePathComponent 
+    createEmptyFolder
 } = require('../utils/s3');
 const { HeadObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 const { s3Client } = require('../config/s3');
@@ -73,6 +70,8 @@ router.get('/public', async (req, res) => {
     }
 });
 
+
+
 router.get('/public/:courseId', async (req, res) => {
     try {
         const { courseId } = req.params;
@@ -112,6 +111,8 @@ router.get('/public/:courseId', async (req, res) => {
         });
     }
 });
+
+
 
 
 router.get('/', async (req, res) => {
@@ -231,138 +232,138 @@ router.get('/my/progress', verifyToken, requireRole(['STUDENT']), async (req, re
 });
 
 // Create course - Using Master DB
-router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
-    const client = await masterPool.connect();
-    try {
-        await client.query('BEGIN');
+// router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
+//     const client = await masterPool.connect();
+//     try {
+//         await client.query('BEGIN');
 
-        console.log('Request body:', req.body);
+//         console.log('Request body:', req.body);
 
-        const { 
-            title, 
-            description, 
-            instructor_id,
-            main_category_id,
-            sub_category_id,
-            thumbnail_url,
-            price,
-            level,
-            classmode,
-            zoom_link
-        } = req.body;
+//         const { 
+//             title, 
+//             description, 
+//             instructor_id,
+//             main_category_id,
+//             sub_category_id,
+//             thumbnail_url,
+//             price,
+//             level,
+//             classmode,
+//             zoom_link
+//         } = req.body;
 
-        // Validate required fields
-        if (!title || !description || !instructor_id || !main_category_id || !sub_category_id || !classmode) {
-            console.log('Missing fields:', {
-                title: !!title,
-                description: !!description,
-                instructor_id: !!instructor_id,
-                main_category_id: !!main_category_id,
-                sub_category_id: !!sub_category_id,
-                classmode: !!classmode
-            });
-            throw new Error('Missing required fields');
-        }
+//         // Validate required fields
+//         if (!title || !description || !instructor_id || !main_category_id || !sub_category_id || !classmode) {
+//             console.log('Missing fields:', {
+//                 title: !!title,
+//                 description: !!description,
+//                 instructor_id: !!instructor_id,
+//                 main_category_id: !!main_category_id,
+//                 sub_category_id: !!sub_category_id,
+//                 classmode: !!classmode
+//             });
+//             throw new Error('Missing required fields');
+//         }
 
-        // Validate classmode
-        if (!['ONLINE', 'VOD'].includes(classmode.toUpperCase())) {
-            throw new Error('Invalid classmode. Must be either ONLINE or VOD');
-        }
+//         // Validate classmode
+//         if (!['ONLINE', 'VOD'].includes(classmode.toUpperCase())) {
+//             throw new Error('Invalid classmode. Must be either ONLINE or VOD');
+//         }
 
-        // Create the course
-        const query = `
-            INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
-            (
-                title,
-                description, 
-                instructor_id,
-                main_category_id,
-                sub_category_id,
-                thumbnail_url,
-                price,
-                level,
-                classmode,
-                zoom_link,
-                coursebucket
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            RETURNING *
-        `;
+//         // Create the course
+//         const query = `
+//             INSERT INTO ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+//             (
+//                 title,
+//                 description, 
+//                 instructor_id,
+//                 main_category_id,
+//                 sub_category_id,
+//                 thumbnail_url,
+//                 price,
+//                 level,
+//                 classmode,
+//                 zoom_link,
+//                 coursebucket
+//             )
+//             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+//             RETURNING *
+//         `;
 
-        // 임시로 빈 값 설정 (나중에 업데이트)
-        const tempCoursebucket = 'nationslablmscoursebucket';
+//         // 임시로 빈 값 설정 (나중에 업데이트)
+//         const tempCoursebucket = 'nationslablmscoursebucket';
 
-        const values = [
-            title,
-            description,
-            instructor_id,
-            main_category_id,
-            sub_category_id,
-            thumbnail_url,
-            price,
-            level,
-            classmode.toUpperCase(),
-            zoom_link,
-            tempCoursebucket
-        ];
+//         const values = [
+//             title,
+//             description,
+//             instructor_id,
+//             main_category_id,
+//             sub_category_id,
+//             thumbnail_url,
+//             price,
+//             level,
+//             classmode.toUpperCase(),
+//             zoom_link,
+//             tempCoursebucket
+//         ];
 
-        const result = await client.query(query, values);
-        const courseId = result.rows[0].id;
+//         const result = await client.query(query, values);
+//         const courseId = result.rows[0].id;
         
-        // 이제 courseId를 알았으니 실제 폴더 경로 생성
-        const folderPath = classmode.toUpperCase() === 'VOD' ? `vod/${courseId}/` : `${courseId}/`;
+//         // 이제 courseId를 알았으니 실제 폴더 경로 생성
+//         const folderPath = classmode.toUpperCase() === 'VOD' ? `vod/${courseId}/` : `${courseId}/`;
         
-        // coursebucket 업데이트
-        const updateQuery = `
-            UPDATE ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
-            SET coursebucket = $1
-            WHERE id = $2
-        `;
-        await client.query(updateQuery, [`nationslablmscoursebucket/${folderPath}`, courseId]);
+//         // coursebucket 업데이트
+//         const updateQuery = `
+//             UPDATE ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+//             SET coursebucket = $1
+//             WHERE id = $2
+//         `;
+//         await client.query(updateQuery, [`nationslablmscoursebucket/${folderPath}`, courseId]);
         
-        // S3에 폴더 생성
-        await createEmptyFolder(folderPath);
+//         // S3에 폴더 생성
+//         await createEmptyFolder(folderPath);
         
-        await client.query('COMMIT');
+//         await client.query('COMMIT');
 
-        res.status(201).json({ 
-            success: true,
-            message: 'Course created successfully',
-            data: {
-                course: result.rows[0]
-            }
-        });
-    } catch (error) {
-        await client.query('ROLLBACK');
-        console.error('Error creating course:', error);
-        res.status(500).json({ 
-            success: false,
-            message: 'Failed to create course',
-            error: error.message 
-        });
-    } finally {
-        client.release();
-    }
-});
+//         res.status(201).json({ 
+//             success: true,
+//             message: 'Course created successfully',
+//             data: {
+//                 course: result.rows[0]
+//             }
+//         });
+//     } catch (error) {
+//         await client.query('ROLLBACK');
+//         console.error('Error creating course:', error);
+//         res.status(500).json({ 
+//             success: false,
+//             message: 'Failed to create course',
+//             error: error.message 
+//         });
+//     } finally {
+//         client.release();
+//     }
+// });
 
 
 // 강의 수정 기능
-router.put('/:courseId', verifyToken, requireRole(['INSTRUCTOR', 'ADMIN']), async (req, res) => {
-    try {
-        const { courseId } = req.params;
-        const { title, description, is_public } = req.body;
+// router.put('/:courseId', verifyToken, requireRole(['INSTRUCTOR', 'ADMIN']), async (req, res) => {
+//     try {
+//         const { courseId } = req.params;
+//         const { title, description, is_public } = req.body;
         
-        await getPool('write').query(
-            'UPDATE courses SET title = ?, description = ?, is_public = ? WHERE id = ?',
-            [title, description, is_public, courseId]
-        );
+//         await getPool('write').query(
+//             'UPDATE courses SET title = ?, description = ?, is_public = ? WHERE id = ?',
+//             [title, description, is_public, courseId]
+//         );
         
-        res.json({ message: 'Course updated', courseId });
-    } catch (error) {
-        console.error('Error updating course:', error);
-        res.status(500).json({ message: 'Internal server error' });
-    }
-});
+//         res.json({ message: 'Course updated', courseId });
+//     } catch (error) {
+//         console.error('Error updating course:', error);
+//         res.status(500).json({ message: 'Internal server error' });
+//     }
+// });
 
 // Get enrolled courses for a student
 router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
@@ -581,143 +582,6 @@ router.get('/admin/enrollments/all', verifyToken, async (req, res) => {
     }
 });
 
-// Update file download permission (Admin only)
-router.put('/:courseId/materials/:weekNumber/:fileName/permission', verifyToken, requireRole(['ADMIN']), async (req, res) => {
-    try {
-        const { courseId, weekNumber, fileName } = req.params;
-        const { isDownloadable } = req.body;
-
-        console.log('Updating file permission:', {
-            courseId,
-            weekNumber,
-            fileName,
-            isDownloadable
-        });
-
-        if (typeof isDownloadable !== 'boolean') {
-            return res.status(400).json({
-                success: false,
-                message: 'isDownloadable must be a boolean value'
-            });
-        }
-
-        // 강좌 정보 조회
-        const courseQuery = `
-            SELECT id, classmode
-            FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
-            WHERE id = $1
-        `;
-        const courseResult = await getPool('read').query(courseQuery, [courseId]);
-
-        if (courseResult.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Course not found'
-            });
-        }
-
-        const { classmode } = courseResult.rows[0];
-        console.log('Found course:', { courseId, classmode });
-
-        // 파일 경로 생성
-        const sanitizedFileName = sanitizePathComponent(fileName);
-        let key;
-        let bucketName = 'nationslablmscoursebucket';  // 모든 파일이 같은 버킷 사용
-
-        // VOD 파일인 경우도 주차별로 구조화
-        key = `${courseId}/${weekNumber}주차/${sanitizedFileName}`;
-
-        // .m3u8 파일인 경우, 관련된 .ts 파일들도 함께 권한 변경
-        if (fileName.endsWith('.m3u8')) {
-            try {
-                // 같은 디렉토리의 모든 .ts 파일 리스트 조회
-                const command = new ListObjectsV2Command({
-                    Bucket: bucketName,
-                    Prefix: `${courseId}/${weekNumber}주차/`,
-                    Delimiter: '/'
-                });
-                
-                const response = await s3Client.send(command);
-                const tsFiles = (response.Contents || [])
-                    .filter(item => item.Key.endsWith('.ts'))
-                    .map(item => item.Key);
-
-                // 모든 .ts 파일의 권한도 함께 업데이트
-                for (const tsKey of tsFiles) {
-                    await updateFileDownloadPermission(tsKey, isDownloadable, bucketName);
-                }
-
-                console.log('Updated permissions for TS files:', tsFiles);
-            } catch (error) {
-                console.error('Error updating TS files permissions:', error);
-            }
-        } else if (fileName.endsWith('.ts')) {
-            // .ts 파일은 개별적으로 권한을 변경할 수 없음
-            return res.status(400).json({
-                success: false,
-                message: 'TS files permissions can only be modified through their parent M3U8 file'
-            });
-        }
-
-        console.log('Generated file path:', {
-            courseId,
-            originalFileName: fileName,
-            sanitizedFileName,
-            weekNumber,
-            key,
-            bucketName
-        });
-
-        // 파일 존재 여부 확인
-        try {
-            const command = new HeadObjectCommand({
-                Bucket: bucketName,
-                Key: key
-            });
-            await s3Client.send(command);
-        } catch (error) {
-            console.error('File not found:', {
-                bucket: bucketName,
-                key: key,
-                error: error.message
-            });
-            return res.status(404).json({
-                success: false,
-                message: 'File not found in S3',
-                details: {
-                    bucket: bucketName,
-                    key: key
-                }
-            });
-        }
-
-        // S3 파일 다운로드 권한 업데이트
-        await updateFileDownloadPermission(key, isDownloadable, bucketName);
-
-        res.json({
-            success: true,
-            message: `File download permission updated successfully`,
-            data: {
-                courseId,
-                weekNumber,
-                fileName,
-                isDownloadable,
-                bucket: bucketName,
-                key
-            }
-        });
-    } catch (error) {
-        console.error('Error updating file download permission:', error, {
-            stack: error.stack
-        });
-        res.status(500).json({
-            success: false,
-            message: 'Failed to update file download permission',
-            error: error.message
-        });
-    }
-});
-
 // 파일 타입 매핑 함수 수정
 function getFileType(fileName) {
     const extension = fileName.split('.').pop().toLowerCase();
@@ -744,5 +608,112 @@ function getFileType(fileName) {
     };
     return typeMap[extension] || 'unknown';
 }
+
+// 학생 성적 조회
+router.get('/:courseId/my-grades', verifyToken, async (req, res) => {
+    const client = await masterPool.connect();
+    
+    try {
+        const { courseId } = req.params;
+        const studentId = req.user.sub;  // cognito user id from JWT token
+
+        // 수강 여부 확인
+        const enrollmentCheck = await client.query(`
+            SELECT id FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS}
+            WHERE course_id = $1 AND student_id = $2 AND status = 'ACTIVE'
+        `, [courseId, studentId]);
+
+        if (enrollmentCheck.rows.length === 0) {
+            return res.status(403).json({
+                success: false,
+                message: '수강 중인 과목이 아닙니다.'
+            });
+        }
+
+        // 과목 정보와 성적 항목 조회
+        const result = await client.query(`
+            WITH grade_info AS (
+                SELECT 
+                    gi.type,
+                    gi.title,
+                    gi.max_score,
+                    sg.score
+                FROM ${SCHEMAS.GRADE}.grade_items gi
+                LEFT JOIN ${SCHEMAS.GRADE}.student_grades sg 
+                    ON gi.id = sg.grade_item_id 
+                    AND sg.student_id = $1
+                WHERE gi.course_id = $2
+            )
+            SELECT 
+                c.title as course_title,
+                c.attendance_weight,
+                c.assignment_weight,
+                c.exam_weight,
+                (
+                    SELECT json_agg(row_to_json(g))
+                    FROM (
+                        SELECT type, title, max_score, score
+                        FROM grade_info
+                        WHERE type = 'ASSIGNMENT'
+                    ) g
+                ) as assignments,
+                (
+                    SELECT json_agg(row_to_json(g))
+                    FROM (
+                        SELECT type, title, max_score, score
+                        FROM grade_info
+                        WHERE type = 'EXAM'
+                    ) g
+                ) as exams,
+                (
+                    SELECT COALESCE(AVG(CASE WHEN ar.total_duration_seconds > 0 
+                        THEN (ar.duration_seconds::float / ar.total_duration_seconds) * 100 
+                        ELSE 0 END), 0)
+                    FROM ${SCHEMAS.GRADE}.attendance_records ar
+                    WHERE ar.course_id = $2 AND ar.student_id = $1
+                ) as attendance_rate
+            FROM ${SCHEMAS.COURSE}.courses c
+            WHERE c.id = $2
+        `, [studentId, courseId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "과목 정보를 찾을 수 없습니다."
+            });
+        }
+
+        const courseInfo = result.rows[0];
+
+        res.json({
+            success: true,
+            data: {
+                course: {
+                    title: courseInfo.course_title,
+                    attendance_weight: courseInfo.attendance_weight,
+                    assignment_weight: courseInfo.assignment_weight,
+                    exam_weight: courseInfo.exam_weight
+                },
+                grades: {
+                    attendance: {
+                        rate: parseFloat(courseInfo.attendance_rate.toFixed(1)),
+                        score: parseFloat(((courseInfo.attendance_rate * courseInfo.attendance_weight) / 100).toFixed(1))
+                    },
+                    assignments: courseInfo.assignments || [],
+                    exams: courseInfo.exams || []
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching grades:', error);
+        res.status(500).json({
+            success: false,
+            message: "성적 조회 중 오류가 발생했습니다.",
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
 
 module.exports = router; 

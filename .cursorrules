@@ -250,3 +250,111 @@ GET /courses/:courseId/weeks/:weekNumber/materials/:materialId
 1. API 테스트 진행
 2. 영상 길이 초과 시간 체크 기능 구현
 3. 프론트엔드 연동 준비
+
+# 성적 관리 시스템 (Grade Schema)
+
+## 테이블 구조
+
+### 1. grade_categories (평가 카테고리)
+```sql
+CREATE TABLE grade_schema.grade_categories (
+    id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    name varchar(100) NOT NULL,
+    description text,
+    weight numeric(5,2) DEFAULT 100.0,
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamptz DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### 2. grade_items (평가 항목)
+```sql
+CREATE TABLE grade_schema.grade_items (
+    id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    course_id text NOT NULL,
+    type varchar(20) NOT NULL,  -- 'ATTENDANCE', 'ASSIGNMENT', 'EXAM'
+    title varchar(100) NOT NULL,
+    max_score numeric(5,2) NOT NULL,
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamptz DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### 3. course_grade_rules (강좌별 성적 규칙)
+```sql
+CREATE TABLE grade_schema.course_grade_rules (
+    course_id text PRIMARY KEY,
+    attendance_weight numeric(5,2) NOT NULL,
+    assignment_weight numeric(5,2) NOT NULL,
+    exam_weight numeric(5,2) NOT NULL,
+    min_attendance_rate numeric(5,2),
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamptz DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### 4. student_grades (학생 성적)
+```sql
+CREATE TABLE grade_schema.student_grades (
+    id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    student_id text NOT NULL,
+    grade_item_id text NOT NULL,
+    score numeric(5,2) DEFAULT 0,
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamptz DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+## 성적 관리 메커니즘
+
+### 1. 강좌 생성 시
+1. `course_grade_rules` 테이블에 기본 가중치 설정
+   - 출석: 20%
+   - 과제: 50%
+   - 시험: 30%
+
+2. `grade_categories` 테이블에 기본 카테고리 생성
+   - 출석 카테고리
+   - 시험 카테고리
+   - 과제 카테고리
+
+3. `grade_items` 테이블에 기본 출석 항목 생성
+   - 출석 카테고리에 대한 기본 평가 항목
+   - 최대 점수: 100점
+
+### 2. 학생 등록 시
+1. 해당 강좌의 모든 `grade_items`에 대해 `student_grades` 생성
+   - 초기 점수: 0점
+
+### 3. 성적 평가 프로세스
+1. 출석 점수
+   - 실시간 출석 기록
+   - VOD 시청 기록
+   - 출석률 자동 계산
+
+2. 과제 점수
+   - 교수자가 과제 항목 생성
+   - 학생 제출
+   - 교수자 채점
+
+3. 시험 점수
+   - 교수자가 시험 항목 생성
+   - 온라인/오프라인 시험
+   - 교수자 채점
+
+### 4. 최종 성적 산출
+1. 각 카테고리별 평균 점수 계산
+2. 카테고리 가중치 적용
+3. 최종 점수 및 등급 산출
+
+## 주의사항
+1. 성적 항목 생성 시 반드시 course_id 지정
+2. 가중치 총합은 100%여야 함
+3. 출석률 미달 시 성적 처리 로직 필요
+4. 성적 수정 시 히스토리 관리 필요 (향후 추가 예정)
+
+[X] 테이블 스키마 정의
+[X] 기본 CRUD API 구현
+[ ] 성적 히스토리 관리 기능 추가
+[ ] 성적 통계 기능 구현
+[ ] 성적 엑셀 출력 기능 구현

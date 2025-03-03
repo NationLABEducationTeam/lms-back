@@ -21,7 +21,7 @@ router.post('/', verifyToken, async (req, res) => {
         const checkResult = await client.query(checkQuery, [courseId, userId]);
 
         if (checkResult.rows.length > 0) {
-            throw new Error('User is already enrolled in this course');
+            throw new Error('이미 수강신청한 과목입니다.');
         }
 
         // Create enrollment
@@ -32,6 +32,9 @@ router.post('/', verifyToken, async (req, res) => {
             RETURNING *
         `;
         const enrollmentResult = await client.query(enrollmentQuery, [courseId, userId, enrolledAt || new Date()]);
+        
+        // 생성된 enrollment_id 저장
+        const enrollmentId = enrollmentResult.rows[0].id;
 
         // Create initial progress tracking
         const progressQuery = `
@@ -40,17 +43,57 @@ router.post('/', verifyToken, async (req, res) => {
             VALUES ($1, 'NOT_STARTED', $2)
             RETURNING *
         `;
-        const progressResult = await client.query(progressQuery, [enrollmentResult.rows[0].id, enrolledAt || new Date()]);
+        const progressResult = await client.query(progressQuery, [enrollmentId, enrolledAt || new Date()]);
+
+        // 코스 정보 조회 (weeks_count, assignment_count, exam_count)
+        const courseQuery = `
+            SELECT weeks_count, assignment_count, exam_count
+            FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
+            WHERE id = $1
+        `;
+        const courseResult = await client.query(courseQuery, [courseId]);
+        const { weeks_count, assignment_count, exam_count } = courseResult.rows[0];
+
+        // Get all grade items for the course
+        const gradeItemsQuery = `
+            SELECT item_id, item_type, item_name
+            FROM ${SCHEMAS.GRADE}.grade_items
+            WHERE course_id = $1
+            ORDER BY item_order
+        `;
+        const gradeItems = await client.query(gradeItemsQuery, [courseId]);
+
+        // 평가 항목 유형별 개수 계산
+        const attendanceItems = gradeItems.rows.filter(item => item.item_type === 'ATTENDANCE');
+        const assignmentItems = gradeItems.rows.filter(item => item.item_type === 'ASSIGNMENT');
+        const examItems = gradeItems.rows.filter(item => item.item_type === 'EXAM');
+        
+        console.log(`수강신청 초기화 - 출석: ${attendanceItems.length}/${weeks_count}개, 과제: ${assignmentItems.length}/${assignment_count}개, 시험: ${examItems.length}/${exam_count}개`);
+
+        // Initialize student grades for each grade item
+        for (const item of gradeItems.rows) {
+            await client.query(`
+                INSERT INTO ${SCHEMAS.GRADE}.student_grades
+                (enrollment_id, item_id, score, is_completed, submission_date)
+                VALUES ($1, $2, 0, false, NULL)
+            `, [enrollmentId, item.item_id]);
+        }
 
         await client.query('COMMIT');
 
         res.status(201).json({
             success: true,
-            message: 'Enrollment created successfully',
+            message: '수강신청이 완료되었습니다.',
             data: {
                 enrollment: {
                     ...enrollmentResult.rows[0],
-                    progress: progressResult.rows[0]
+                    progress: progressResult.rows[0],
+                    grade_items_count: {
+                        attendance: attendanceItems.length,
+                        assignment: assignmentItems.length,
+                        exam: examItems.length,
+                        total: gradeItems.rows.length
+                    }
                 }
             }
         });
@@ -59,7 +102,7 @@ router.post('/', verifyToken, async (req, res) => {
         console.error('Error creating enrollment:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to create enrollment',
+            message: '수강신청 중 오류가 발생했습니다.',
             error: error.message
         });
     } finally {
@@ -205,6 +248,145 @@ router.put('/:enrollmentId', verifyToken, requireRole(['ADMIN']), async (req, re
         });
     } finally {
         client.release();
+    }
+});
+
+// 진도율 계산 함수
+async function calculateProgress(enrollmentId) {
+    const pool = getPool('read');
+    const client = await pool.connect();
+    
+    try {
+        // 코스 정보 조회
+        const courseQuery = `
+            SELECT c.weeks_count
+            FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
+            JOIN ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS} e ON c.id = e.course_id
+            WHERE e.id = $1
+        `;
+        const courseResult = await client.query(courseQuery, [enrollmentId]);
+        
+        if (courseResult.rows.length === 0) {
+            throw new Error('수강 정보를 찾을 수 없습니다.');
+        }
+        
+        const totalWeeks = parseInt(courseResult.rows[0].weeks_count);
+        
+        // 완료된 강의 수 조회
+        const completedQuery = `
+            SELECT COUNT(*) AS completed_weeks
+            FROM ${SCHEMAS.GRADE}.student_grades sg
+            JOIN ${SCHEMAS.GRADE}.grade_items gi ON sg.item_id = gi.item_id
+            WHERE sg.enrollment_id = $1
+            AND gi.item_type = 'ATTENDANCE'
+            AND sg.is_completed = true
+        `;
+        const completedResult = await client.query(completedQuery, [enrollmentId]);
+        const completedWeeks = parseInt(completedResult.rows[0].completed_weeks);
+        
+        // 진도율 계산
+        const progressRate = (completedWeeks / totalWeeks) * 100;
+        
+        return {
+            completedWeeks,
+            totalWeeks,
+            progressRate: progressRate.toFixed(2)
+        };
+    } catch (error) {
+        console.error('진도율 계산 중 오류:', error);
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+// 특정 주차 강의 수강 완료 처리
+router.post('/complete-week', verifyToken, async (req, res) => {
+    const pool = getPool('write');
+    const client = await pool.connect();
+    
+    try {
+        const { enrollmentId, weekNumber } = req.body;
+        
+        if (!enrollmentId || !weekNumber) {
+            return res.status(400).json({
+                success: false,
+                message: '필수 파라미터가 누락되었습니다.'
+            });
+        }
+        
+        await client.query('BEGIN');
+        
+        // 해당 주차의 출석 항목 찾기
+        const findItemQuery = `
+            SELECT sg.id, sg.item_id
+            FROM ${SCHEMAS.GRADE}.student_grades sg
+            JOIN ${SCHEMAS.GRADE}.grade_items gi ON sg.item_id = gi.item_id
+            WHERE sg.enrollment_id = $1
+            AND gi.item_type = 'ATTENDANCE'
+            AND gi.item_name = $2
+        `;
+        const itemResult = await client.query(findItemQuery, [enrollmentId, `${weekNumber}주차 출석`]);
+        
+        if (itemResult.rows.length === 0) {
+            throw new Error(`${weekNumber}주차 출석 항목을 찾을 수 없습니다.`);
+        }
+        
+        // 출석 완료 처리
+        const updateQuery = `
+            UPDATE ${SCHEMAS.GRADE}.student_grades
+            SET score = 100, is_completed = true, submission_date = CURRENT_TIMESTAMP
+            WHERE id = $1
+            RETURNING *
+        `;
+        const updateResult = await client.query(updateQuery, [itemResult.rows[0].id]);
+        
+        await client.query('COMMIT');
+        
+        // 진도율 계산
+        const progress = await calculateProgress(enrollmentId);
+        
+        res.json({
+            success: true,
+            message: `${weekNumber}주차 강의 수강이 완료되었습니다.`,
+            data: {
+                grade: updateResult.rows[0],
+                progress
+            }
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('강의 수강 완료 처리 중 오류:', error);
+        res.status(500).json({
+            success: false,
+            message: '강의 수강 완료 처리 중 오류가 발생했습니다.',
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
+// 진도율 조회
+router.get('/progress/:enrollmentId', verifyToken, async (req, res) => {
+    try {
+        const { enrollmentId } = req.params;
+        
+        const progress = await calculateProgress(enrollmentId);
+        
+        res.json({
+            success: true,
+            data: {
+                progress
+            }
+        });
+    } catch (error) {
+        console.error('진도율 조회 중 오류:', error);
+        res.status(500).json({
+            success: false,
+            message: '진도율 조회 중 오류가 발생했습니다.',
+            error: error.message
+        });
     }
 });
 

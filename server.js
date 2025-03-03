@@ -117,6 +117,9 @@ app.use(`${API_PREFIX}/ai`, aiRouter);
 app.use(`${API_PREFIX}/users`, usersRouter);
 app.use(`${API_PREFIX}/enrollments`, enrollmentsRouter);
 app.use(`${API_PREFIX}/admin/courses`, require('./src/routes/admin/courses'));
+app.use(`${API_PREFIX}/admin/grades`, require('./src/routes/admin/grades'));
+app.use(`${API_PREFIX}/admin/zoom`, require('./src/routes/admin/zoom'));
+app.use(`${API_PREFIX}/admin/zoom-test`, require('./src/routes/admin/zoom-test'));
 app.use(`${API_PREFIX}/timemarks`, timemarksRouter);
 app.use('/auth', authRoutes);
 

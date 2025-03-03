@@ -10,7 +10,8 @@ const SCHEMAS = {
     COMMUNICATION: 'communication_schema',
     COURSE: 'course_schema',
     ENROLLMENT: 'enrollment_schema',
-    LEARNING: 'learning_schema'
+    LEARNING: 'learning_schema',
+    GRADE: 'grade_schema'
 };
 
 // Tables in each schema
@@ -41,6 +42,12 @@ const TABLES = {
         ATTENDANCE: 'attendance',
         ASSIGNMENTS: 'assignments',
         ASSIGNMENT_SUBMISSION: 'assignment_submission'
+    },
+    GRADE: {
+        COURSE_GRADE_RULES: 'course_grade_rules',
+        STUDENT_GRADES: 'student_grades',
+        ATTENDANCE_RECORDS: 'attendance_records',
+        FINAL_GRADES: 'final_grades'
     }
 };
 

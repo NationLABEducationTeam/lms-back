@@ -70,13 +70,22 @@ router.post('/', verifyToken, async (req, res) => {
         
         console.log(`수강신청 초기화 - 출석: ${attendanceItems.length}/${weeks_count}개, 과제: ${assignmentItems.length}/${assignment_count}개, 시험: ${examItems.length}/${exam_count}개`);
 
-        // Initialize student grades for each grade item
-        for (const item of gradeItems.rows) {
-            await client.query(`
-                INSERT INTO ${SCHEMAS.GRADE}.student_grades
-                (enrollment_id, item_id, score, is_completed, submission_date)
-                VALUES ($1, $2, 0, false, NULL)
-            `, [enrollmentId, item.item_id]);
+        // 기존 평가 항목에 대한 student_grades 레코드 생성
+        if (gradeItems.rows.length > 0) {
+            console.log(`${gradeItems.rows.length}개의 평가 항목에 대한 학생 성적 레코드 생성 중...`);
+            
+            for (const item of gradeItems.rows) {
+                await client.query(
+                    `INSERT INTO ${SCHEMAS.GRADE}.student_grades 
+                    (enrollment_id, item_id, score, is_completed, submission_date)
+                    VALUES ($1, $2, 0, false, NULL)`,
+                    [enrollmentId, item.item_id]
+                );
+            }
+            
+            console.log(`학생 성적 레코드 생성 완료`);
+        } else {
+            console.log(`평가 항목이 없어 학생 성적 레코드를 생성하지 않음`);
         }
 
         await client.query('COMMIT');

@@ -231,8 +231,8 @@ function sanitizePathComponent(str) {
 /**
  * 파일 업로드를 위한 presigned URL을 생성합니다.
  * @param {string} courseId - 강좌 ID
- * @param {number} weekNumber - 주차 번호
- * @param {Array<{name: string, type: string, size: number}>} files - 업로드할 파일 정보 배열
+ * @param {string|number} weekNumber - 주차 번호 또는 'assignments'와 같은 특수 폴더명
+ * @param {Array<{name: string, type: string, size: number, prefix?: string}>} files - 업로드할 파일 정보 배열
  * @returns {Promise<Array>} - presigned URL 배열
  */
 async function generateUploadUrls(courseId, weekNumber, files) {
@@ -244,14 +244,25 @@ async function generateUploadUrls(courseId, weekNumber, files) {
             files: files.map(f => ({
                 name: f.name,
                 type: f.type,
-                size: f.size
+                size: f.size,
+                prefix: f.prefix
             }))
         });
 
         const presignedUrls = await Promise.all(
             files.map(async (file) => {
                 const sanitizedFileName = sanitizePathComponent(file.name);
-                const key = `${courseId}/${weekNumber}주차/${sanitizedFileName}`;
+                
+                // 파일 경로 결정 (과제/퀴즈 파일인 경우 prefix 사용)
+                let key;
+                if (file.prefix) {
+                    // 과제/퀴즈 파일 경로: assignments/{itemId}/{fileName}
+                    key = `${file.prefix}/${sanitizedFileName}`;
+                } else {
+                    // 일반 강의 자료 경로: {courseId}/{weekNumber}주차/{fileName}
+                    const weekSuffix = typeof weekNumber === 'number' ? `${weekNumber}주차` : weekNumber;
+                    key = `${courseId}/${weekSuffix}/${sanitizedFileName}`;
+                }
                 
                 console.log('Processing file:', {
                     originalName: file.name,
@@ -592,8 +603,62 @@ async function generateDownloadUrl(key) {
     }
 }
 
+/**
+ * 과제/퀴즈 파일 목록을 조회합니다.
+ * @param {string} itemId - 평가 항목 ID
+ * @returns {Promise<Array>} - 파일 목록
+ */
+async function listAssignmentFiles(itemId) {
+    try {
+        console.log('=== listAssignmentFiles called ===');
+        console.log('Request parameters:', { itemId });
+
+        const prefix = `assignments/${itemId}/`;
+        
+        const command = new ListObjectsV2Command({
+            Bucket: 'nationslablmscoursebucket',
+            Prefix: prefix,
+            Delimiter: '/'
+        });
+
+        const response = await s3Client.send(command);
+        
+        // S3 응답에서 파일 목록 추출
+        const files = [];
+        
+        // Contents에는 파일 목록이 포함됨
+        if (response.Contents) {
+            for (const item of response.Contents) {
+                // 폴더 자체는 제외
+                if (item.Key !== prefix) {
+                    const fileName = item.Key.replace(prefix, '');
+                    const fileType = getFileType(fileName);
+                    const isDownloadable = await isFileDownloadable(item.Key);
+                    
+                    files.push({
+                        key: item.Key,
+                        fileName,
+                        fileType,
+                        lastModified: item.LastModified,
+                        size: item.Size,
+                        isDownloadable
+                    });
+                }
+            }
+        }
+        
+        console.log(`Found ${files.length} files for assignment item ${itemId}`);
+        return files;
+    } catch (error) {
+        console.error(`Error listing assignment files for item ${itemId}:`, error);
+        throw error;
+    }
+}
+
 module.exports = {
     listCourseWeekMaterials,
+    listWeekFiles,
+    getFileType,
     createEmptyFolder,
     generateUploadUrls,
     createVodFolder,
@@ -602,5 +667,6 @@ module.exports = {
     updateFileDownloadPermission,
     isFileDownloadable,
     generateDownloadUrl,
-    sanitizePathComponent
+    sanitizePathComponent,
+    listAssignmentFiles
 }; 

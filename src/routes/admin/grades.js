@@ -4,73 +4,93 @@ const { verifyToken, requireRole } = require('../../middlewares/auth');
 const { masterPool, SCHEMAS } = require('../../config/database');
 const { validateGradeItem, validateAttendance, validateGradeRules } = require('../../middlewares/validation');
 const { v4: uuidv4 } = require('uuid');
+const { generateUploadUrls, listAssignmentFiles } = require('../../utils/s3');
 
 // 평가 항목 추가 (과제 또는 시험)
 router.post('/items', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     const client = await masterPool.connect();
     try {
         await client.query('BEGIN');
-        const { courseId, type, title, maxScore = 100, weight } = req.body;
+        const { courseId, type, title, due_date, files } = req.body;
 
         // 평가 항목 유효성 검사
         if (!['ASSIGNMENT', 'EXAM'].includes(type)) {
             throw new Error('평가 항목 유형은 ASSIGNMENT 또는 EXAM이어야 합니다.');
         }
 
-        // 해당 과목의 현재 평가 항목들의 총 가중치 확인
-        const weightQuery = `
-            SELECT 
-                c.${type.toLowerCase()}_weight as total_category_weight,
-                COALESCE(SUM(gi.weight), 0) as current_items_weight
-            FROM ${SCHEMAS.COURSE}.courses c
-            LEFT JOIN ${SCHEMAS.GRADE}.grade_items gi updateFileDownloadPermission
-                ON c.id = gi.course_id 
-                AND gi.type = $1
-            WHERE c.id = $2
-            GROUP BY c.id, c.${type.toLowerCase()}_weight
+        // 과목 존재 여부 확인
+        const courseQuery = `
+            SELECT id FROM ${SCHEMAS.COURSE}.courses
+            WHERE id = $1
         `;
         
-        const weightResult = await client.query(weightQuery, [type, courseId]);
+        const courseResult = await client.query(courseQuery, [courseId]);
         
-        if (weightResult.rows.length === 0) {
+        if (courseResult.rows.length === 0) {
             throw new Error('과목을 찾을 수 없습니다.');
-        }
-
-        const { total_category_weight, current_items_weight } = weightResult.rows[0];
-        
-        if (current_items_weight + weight > total_category_weight) {
-            throw new Error(`${type} 유형의 총 가중치(${total_category_weight}%)를 초과할 수 없습니다.`);
         }
 
         // 새 평가 항목 추가
         const insertResult = await client.query(
             `INSERT INTO ${SCHEMAS.GRADE}.grade_items 
-            (course_id, type, title, max_score, weight)
-            VALUES ($1, $2, $3, $4, $5)
+            (course_id, item_type, item_name, item_order, due_date)
+            VALUES ($1, $2, $3, (SELECT COALESCE(MAX(item_order), 0) + 1 FROM ${SCHEMAS.GRADE}.grade_items WHERE course_id = $1), $4)
             RETURNING *`,
-            [courseId, type, title, maxScore, weight]
+            [courseId, type, title, due_date]
         );
+
+        const itemId = insertResult.rows[0].item_id;
 
         // 수강 중인 모든 학생들의 점수 초기화
         await client.query(
             `INSERT INTO ${SCHEMAS.GRADE}.student_grades 
-            (student_id, course_id, grade_item_id, score)
+            (enrollment_id, item_id, score, is_completed, submission_date)
             SELECT 
-                e.student_id,
-                e.course_id,
+                e.id,
                 $1,
-                0  // 여기서 모든 학생의 점수를 0으로 초기화
+                0,
+                false,
+                NULL
             FROM ${SCHEMAS.ENROLLMENT}.enrollments e
             WHERE e.course_id = $2 AND e.status = 'ACTIVE'`,
-            [insertResult.rows[0].id, courseId]
+            [itemId, courseId]
         );
 
         await client.query('COMMIT');
         
+        // 파일 업로드를 위한 presigned URL 생성
+        let presignedUrls = [];
+        if (files && files.length > 0) {
+            try {
+                // 과제/퀴즈 파일은 'assignments/{itemId}/' 경로에 저장
+                const folderPrefix = `assignments/${itemId}`;
+                
+                // 파일 정보에 폴더 경로 추가
+                const filesWithPrefix = files.map(file => ({
+                    ...file,
+                    prefix: folderPrefix
+                }));
+                
+                // presigned URL 생성
+                presignedUrls = await generateUploadUrls(courseId, 'assignments', filesWithPrefix);
+                
+                console.log('Generated presigned URLs for assignment files:', {
+                    itemId,
+                    urlCount: presignedUrls.length
+                });
+            } catch (uploadError) {
+                console.error('Error generating upload URLs for assignment files:', uploadError);
+                // URL 생성 실패해도 평가 항목 생성은 성공으로 처리
+            }
+        }
+        
         res.json({
             success: true,
             message: "평가 항목이 추가되었습니다.",
-            data: insertResult.rows[0]
+            data: {
+                ...insertResult.rows[0],
+                uploadUrls: presignedUrls
+            }
         });
     } catch (error) {
         await client.query('ROLLBACK');
@@ -93,7 +113,7 @@ router.get('/items/detail/:itemId', verifyToken, async (req, res) => {
 
         const result = await client.query(
             `SELECT * FROM ${SCHEMAS.GRADE}.grade_items
-            WHERE id = $1`,
+            WHERE item_id = $1`,
             [itemId]
         );
 
@@ -144,7 +164,7 @@ router.get('/items/:itemId', verifyToken, async (req, res, next) => {
             const result = await client.query(
                 `SELECT * FROM ${SCHEMAS.GRADE}.grade_items
                 WHERE course_id = $1
-                ORDER BY created_at ASC`,
+                ORDER BY item_order ASC`,
                 [itemId]
             );
 
@@ -175,6 +195,75 @@ router.post('/items/:itemId', verifyToken, async (req, res, next) => {
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     
     if (uuidRegex.test(itemId)) {
+        // 요청 본문에 데이터가 있는 경우 새 항목 추가로 처리
+        if (req.body && Object.keys(req.body).length > 0) {
+            const { title, type, deadline } = req.body;
+            
+            if (title && type) {
+                const client = await masterPool.connect();
+                try {
+                    await client.query('BEGIN');
+                    
+                    // 과목 존재 여부 확인
+                    const courseQuery = `
+                        SELECT id FROM ${SCHEMAS.COURSE}.courses
+                        WHERE id = $1
+                    `;
+                    
+                    const courseResult = await client.query(courseQuery, [itemId]);
+                    
+                    if (courseResult.rows.length === 0) {
+                        return res.status(404).json({
+                            success: false,
+                            message: "과목을 찾을 수 없습니다."
+                        });
+                    }
+                    
+                    // 새 평가 항목 추가
+                    const insertResult = await client.query(
+                        `INSERT INTO ${SCHEMAS.GRADE}.grade_items 
+                        (course_id, item_type, item_name, item_order, due_date)
+                        VALUES ($1, $2, $3, (SELECT COALESCE(MAX(item_order), 0) + 1 FROM ${SCHEMAS.GRADE}.grade_items WHERE course_id = $1), $4)
+                        RETURNING *`,
+                        [itemId, type, title, deadline]
+                    );
+                    
+                    // 수강 중인 모든 학생들의 점수 초기화
+                    await client.query(
+                        `INSERT INTO ${SCHEMAS.GRADE}.student_grades 
+                        (enrollment_id, item_id, score, is_completed, submission_date)
+                        SELECT 
+                            e.id,
+                            $1,
+                            0,
+                            false,
+                            NULL
+                        FROM ${SCHEMAS.ENROLLMENT}.enrollments e
+                        WHERE e.course_id = $2 AND e.status = 'ACTIVE'`,
+                        [insertResult.rows[0].item_id, itemId]
+                    );
+                    
+                    await client.query('COMMIT');
+                    
+                    return res.json({
+                        success: true,
+                        message: "평가 항목이 추가되었습니다.",
+                        data: insertResult.rows[0]
+                    });
+                } catch (error) {
+                    await client.query('ROLLBACK');
+                    console.error('Error adding grade item:', error);
+                    return res.status(500).json({
+                        success: false,
+                        message: "평가 항목 추가 중 오류가 발생했습니다.",
+                        error: error.message
+                    });
+                } finally {
+                    client.release();
+                }
+            }
+        }
+        
         // 강의 상세 페이지에서 자동으로 호출되는 경우 빈 배열 반환
         // 실제 필요한 경우에만 명시적으로 호출하도록 프론트엔드 수정 필요
         const referer = req.headers.referer || '';
@@ -192,7 +281,7 @@ router.post('/items/:itemId', verifyToken, async (req, res, next) => {
             const result = await client.query(
                 `SELECT * FROM ${SCHEMAS.GRADE}.grade_items
                 WHERE course_id = $1
-                ORDER BY created_at ASC`,
+                ORDER BY item_order ASC`,
                 [itemId]
             );
 
@@ -222,7 +311,7 @@ router.put('/items/:itemId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), 
     try {
         await client.query('BEGIN');
         const { itemId } = req.params;
-        const { title, maxScore, weight, type } = req.body;
+        const { title, due_date, type } = req.body;
 
         // type 필드 확인
         if (!type || !['ASSIGNMENT', 'EXAM'].includes(type)) {
@@ -235,7 +324,7 @@ router.put('/items/:itemId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), 
         // 평가 항목 존재 확인
         const itemCheckResult = await client.query(
             `SELECT * FROM ${SCHEMAS.GRADE}.grade_items
-            WHERE id = $1`,
+            WHERE item_id = $1`,
             [itemId]
         );
 
@@ -246,56 +335,17 @@ router.put('/items/:itemId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), 
             });
         }
 
-        const gradeItem = itemCheckResult.rows[0];
-        const courseId = gradeItem.course_id;
-
-        // 과목 정보 조회
-        const courseResult = await client.query(
-            `SELECT * FROM ${SCHEMAS.COURSE}.courses
-            WHERE id = $1`,
-            [courseId]
-        );
-
-        if (courseResult.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "과목 정보를 찾을 수 없습니다."
-            });
-        }
-
-        const course = courseResult.rows[0];
-        const total_category_weight = type.toLowerCase() === 'assignment' 
-            ? course.assignment_weight 
-            : course.exam_weight;
-
-        // 해당 과목의 현재 평가 항목들의 총 가중치 확인 (수정하려는 항목 제외)
-        const weightQuery = `
-            SELECT 
-                COALESCE(SUM(weight), 0) as current_items_weight
-            FROM ${SCHEMAS.GRADE}.grade_items
-            WHERE course_id = $1 
-            AND type = $2
-            AND id != $3
-        `;
-        
-        const weightResult = await client.query(weightQuery, [courseId, type, itemId]);
-        const { current_items_weight } = weightResult.rows[0];
-        
-        if (current_items_weight + weight > total_category_weight) {
-            throw new Error(`${type} 유형의 총 가중치(${total_category_weight}%)를 초과할 수 없습니다.`);
-        }
-
         // 평가 항목 업데이트
         const updateResult = await client.query(
             `UPDATE ${SCHEMAS.GRADE}.grade_items
             SET 
-                title = $1,
-                max_score = $2,
-                weight = $3,
+                item_name = $1,
+                item_type = $2,
+                due_date = $3,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $4
+            WHERE item_id = $4
             RETURNING *`,
-            [title, maxScore, weight, itemId]
+            [title, type, due_date, itemId]
         );
 
         await client.query('COMMIT');
@@ -328,7 +378,7 @@ router.delete('/items/:itemId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']
         // 평가 항목 존재 확인
         const checkResult = await client.query(
             `SELECT * FROM ${SCHEMAS.GRADE}.grade_items
-            WHERE id = $1`,
+            WHERE item_id = $1`,
             [itemId]
         );
 
@@ -342,14 +392,14 @@ router.delete('/items/:itemId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']
         // 관련 학생 점수 삭제
         await client.query(
             `DELETE FROM ${SCHEMAS.GRADE}.student_grades
-            WHERE grade_item_id = $1`,
+            WHERE item_id = $1`,
             [itemId]
         );
 
         // 평가 항목 삭제
         await client.query(
             `DELETE FROM ${SCHEMAS.GRADE}.grade_items
-            WHERE id = $1`,
+            WHERE item_id = $1`,
             [itemId]
         );
 
@@ -381,7 +431,7 @@ router.get('/items/:courseId', verifyToken, async (req, res) => {
         const result = await client.query(
             `SELECT * FROM ${SCHEMAS.GRADE}.grade_items
             WHERE course_id = $1
-            ORDER BY created_at ASC`,
+            ORDER BY item_order ASC`,
             [courseId]
         );
 
@@ -408,14 +458,14 @@ router.put('/scores', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (
         await client.query('BEGIN');
 
         const { gradeItemId, scores } = req.body;
-        // scores 형식: [{ studentId: 'xxx', score: 85 }, ...]
+        // scores 형식: [{ enrollmentId: 'xxx', score: 85 }, ...]
 
         // 평가 항목 존재 확인 및 정보 조회
         const gradeItemResult = await client.query(
-            `SELECT gi.*, c.${type.toLowerCase()}_weight as category_weight
+            `SELECT gi.*
             FROM ${SCHEMAS.GRADE}.grade_items gi
             JOIN ${SCHEMAS.COURSE}.courses c ON gi.course_id = c.id
-            WHERE gi.id = $1`,
+            WHERE gi.item_id = $1`,
             [gradeItemId]
         );
 
@@ -423,12 +473,10 @@ router.put('/scores', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (
             throw new Error('평가 항목을 찾을 수 없습니다.');
         }
 
-        const gradeItem = gradeItemResult.rows[0];
-
         // 점수 유효성 검사 및 업데이트
-        for (const { studentId, score } of scores) {
-            if (score < 0 || score > gradeItem.max_score) {
-                throw new Error(`학생 ${studentId}의 점수가 유효하지 않습니다. (0-${gradeItem.max_score})`);
+        for (const { enrollmentId, score } of scores) {
+            if (score < 0 || score > 100) {
+                throw new Error(`학생 ${enrollmentId}의 점수가 유효하지 않습니다. (0-100)`);
             }
 
             // 점수 업데이트
@@ -437,8 +485,8 @@ router.put('/scores', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (
                 SET 
                     score = $1, 
                     updated_at = CURRENT_TIMESTAMP
-                WHERE grade_item_id = $2 AND student_id = $3`,
-                [score, gradeItemId, studentId]
+                WHERE item_id = $2 AND enrollment_id = $3`,
+                [score, gradeItemId, enrollmentId]
             );
         }
 
@@ -475,23 +523,35 @@ router.get('/course/:courseId/student/:studentId', verifyToken, async (req, res)
             });
         }
 
+        // 수강 정보 조회
+        const enrollmentResult = await client.query(
+            `SELECT id FROM ${SCHEMAS.ENROLLMENT}.enrollments
+            WHERE course_id = $1 AND student_id = $2`,
+            [courseId, studentId]
+        );
+
+        if (enrollmentResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "수강 정보를 찾을 수 없습니다."
+            });
+        }
+
+        const enrollmentId = enrollmentResult.rows[0].id;
+
         // 성적 정보 조회
         const result = await client.query(
             `WITH grade_summary AS (
                 SELECT 
-                    gi.type,
-                    gi.weight,
-                    gi.max_score,
+                    gi.item_type,
+                    gi.item_name,
+                    gi.due_date,
                     sg.score,
-                    CASE 
-                        WHEN gi.max_score > 0 THEN 
-                            (sg.score::float / gi.max_score) * gi.weight
-                        ELSE 0 
-                    END as weighted_score
+                    sg.is_completed
                 FROM ${SCHEMAS.GRADE}.grade_items gi
                 LEFT JOIN ${SCHEMAS.GRADE}.student_grades sg 
-                    ON gi.id = sg.grade_item_id 
-                    AND sg.student_id = $1
+                    ON gi.item_id = sg.item_id 
+                    AND sg.enrollment_id = $1
                 WHERE gi.course_id = $2
             )
             SELECT 
@@ -503,20 +563,20 @@ router.get('/course/:courseId/student/:studentId', verifyToken, async (req, res)
                     'ASSIGNMENT', (
                         SELECT json_agg(row_to_json(gs))
                         FROM grade_summary gs
-                        WHERE gs.type = 'ASSIGNMENT'
+                        WHERE gs.item_type = 'ASSIGNMENT'
                     ),
                     'EXAM', (
                         SELECT json_agg(row_to_json(gs))
                         FROM grade_summary gs
-                        WHERE gs.type = 'EXAM'
+                        WHERE gs.item_type = 'EXAM'
                     )
                 ) as grade_items,
                 COALESCE(
-                    SUM(CASE WHEN type = 'ASSIGNMENT' THEN weighted_score ELSE 0 END),
+                    AVG(CASE WHEN item_type = 'ASSIGNMENT' THEN score ELSE NULL END),
                     0
                 ) as total_assignment_score,
                 COALESCE(
-                    SUM(CASE WHEN type = 'EXAM' THEN weighted_score ELSE 0 END),
+                    AVG(CASE WHEN item_type = 'EXAM' THEN score ELSE NULL END),
                     0
                 ) as total_exam_score
             FROM ${SCHEMAS.COURSE}.courses c
@@ -528,7 +588,7 @@ router.get('/course/:courseId/student/:studentId', verifyToken, async (req, res)
                 c.attendance_weight,
                 c.assignment_weight,
                 c.exam_weight`,
-            [studentId, courseId]
+            [enrollmentId, courseId]
         );
 
         if (result.rows.length === 0) {
@@ -727,6 +787,19 @@ router.get('/final/:courseId/:studentId', verifyToken, async (req, res) => {
 
 // 헬퍼 함수: 최종 성적 업데이트
 async function updateFinalGrades(client, courseId, studentId) {
+    // 수강 정보 조회
+    const enrollmentResult = await client.query(
+        `SELECT id FROM ${SCHEMAS.ENROLLMENT}.enrollments
+        WHERE course_id = $1 AND student_id = $2`,
+        [courseId, studentId]
+    );
+
+    if (enrollmentResult.rows.length === 0) {
+        throw new Error('수강 정보를 찾을 수 없습니다.');
+    }
+
+    const enrollmentId = enrollmentResult.rows[0].id;
+
     // 출석률 계산
     const attendanceResult = await client.query(
         `SELECT 
@@ -743,51 +816,43 @@ async function updateFinalGrades(client, courseId, studentId) {
     // 과제 점수 계산 (수정된 부분)
     const assignmentResult = await client.query(
         `WITH assignment_weights AS (
-            SELECT SUM(weight) as total_weight
+            SELECT COUNT(*) as total_items
             FROM ${SCHEMAS.GRADE}.grade_items
-            WHERE course_id = $1 AND type = 'ASSIGNMENT'
+            WHERE course_id = $1 AND item_type = 'ASSIGNMENT'
         )
         SELECT 
             COALESCE(
-                SUM(
-                    (sg.score::float / NULLIF(gi.max_score, 0)) * 
-                    (gi.weight::float / NULLIF(aw.total_weight, 0))
-                ) * 100,
+                AVG(sg.score),
                 0
             ) as weighted_assignment_score
         FROM ${SCHEMAS.GRADE}.grade_items gi
         LEFT JOIN ${SCHEMAS.GRADE}.student_grades sg 
-            ON gi.id = sg.grade_item_id 
-            AND sg.student_id = $2
-        CROSS JOIN assignment_weights aw
+            ON gi.item_id = sg.item_id 
+            AND sg.enrollment_id = $3
         WHERE gi.course_id = $1 
-        AND gi.type = 'ASSIGNMENT'`,
-        [courseId, studentId]
+        AND gi.item_type = 'ASSIGNMENT'`,
+        [courseId, studentId, enrollmentId]
     );
 
     // 시험 점수 계산 (동일한 방식으로 수정)
     const examResult = await client.query(
         `WITH exam_weights AS (
-            SELECT SUM(weight) as total_weight
+            SELECT COUNT(*) as total_items
             FROM ${SCHEMAS.GRADE}.grade_items
-            WHERE course_id = $1 AND type = 'EXAM'
+            WHERE course_id = $1 AND item_type = 'EXAM'
         )
         SELECT 
             COALESCE(
-                SUM(
-                    (sg.score::float / NULLIF(gi.max_score, 0)) * 
-                    (gi.weight::float / NULLIF(ew.total_weight, 0))
-                ) * 100,
+                AVG(sg.score),
                 0
             ) as weighted_exam_score
         FROM ${SCHEMAS.GRADE}.grade_items gi
         LEFT JOIN ${SCHEMAS.GRADE}.student_grades sg 
-            ON gi.id = sg.grade_item_id 
-            AND sg.student_id = $2
-        CROSS JOIN exam_weights ew
+            ON gi.item_id = sg.item_id 
+            AND sg.enrollment_id = $3
         WHERE gi.course_id = $1 
-        AND gi.type = 'EXAM'`,
-        [courseId, studentId]
+        AND gi.item_type = 'EXAM'`,
+        [courseId, studentId, enrollmentId]
     );
 
     // 규칙 조회
@@ -823,5 +888,135 @@ async function updateFinalGrades(client, courseId, studentId) {
         [studentId, courseId, attendanceRate, assignmentScore, examScore, totalScore, attendanceRate]
     );
 }
+
+// 평가 항목 파일 목록 조회
+router.get('/items/:itemId/files', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR', 'STUDENT']), async (req, res) => {
+    try {
+        const { itemId } = req.params;
+        
+        // 평가 항목 존재 여부 확인
+        const client = await masterPool.connect();
+        try {
+            const itemQuery = `
+                SELECT * FROM ${SCHEMAS.GRADE}.grade_items
+                WHERE item_id = $1
+            `;
+            
+            const itemResult = await client.query(itemQuery, [itemId]);
+            
+            if (itemResult.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: "평가 항목을 찾을 수 없습니다."
+                });
+            }
+            
+            // 학생인 경우 해당 과목을 수강 중인지 확인
+            if (req.user.role === 'STUDENT') {
+                const enrollmentQuery = `
+                    SELECT * FROM ${SCHEMAS.ENROLLMENT}.enrollments
+                    WHERE student_id = $1 AND course_id = $2 AND status = 'ACTIVE'
+                `;
+                
+                const enrollmentResult = await client.query(enrollmentQuery, [
+                    req.user.sub,
+                    itemResult.rows[0].course_id
+                ]);
+                
+                if (enrollmentResult.rows.length === 0) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "해당 과목을 수강 중이 아닙니다."
+                    });
+                }
+            }
+        } finally {
+            client.release();
+        }
+        
+        // S3에서 파일 목록 조회
+        const files = await listAssignmentFiles(itemId);
+        
+        res.json({
+            success: true,
+            data: {
+                files
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching assignment files:', error);
+        res.status(500).json({
+            success: false,
+            message: "파일 목록 조회 중 오류가 발생했습니다.",
+            error: error.message
+        });
+    }
+});
+
+// 평가 항목 파일 업로드를 위한 URL 생성
+router.post('/items/:itemId/upload-urls', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
+    try {
+        const { itemId } = req.params;
+        const { files } = req.body;
+        
+        if (!files || !Array.isArray(files) || files.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "업로드할 파일 정보가 필요합니다."
+            });
+        }
+        
+        // 평가 항목 존재 여부 확인
+        const client = await masterPool.connect();
+        let courseId;
+        
+        try {
+            const itemQuery = `
+                SELECT * FROM ${SCHEMAS.GRADE}.grade_items
+                WHERE item_id = $1
+            `;
+            
+            const itemResult = await client.query(itemQuery, [itemId]);
+            
+            if (itemResult.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: "평가 항목을 찾을 수 없습니다."
+                });
+            }
+            
+            courseId = itemResult.rows[0].course_id;
+        } finally {
+            client.release();
+        }
+        
+        // 과제/퀴즈 파일은 'assignments/{itemId}/' 경로에 저장
+        const folderPrefix = `assignments/${itemId}`;
+        
+        // 파일 정보에 폴더 경로 추가
+        const filesWithPrefix = files.map(file => ({
+            ...file,
+            prefix: folderPrefix
+        }));
+        
+        // presigned URL 생성
+        const presignedUrls = await generateUploadUrls(courseId, 'assignments', filesWithPrefix);
+        
+        res.json({
+            success: true,
+            message: "업로드 URL이 생성되었습니다.",
+            data: {
+                urls: presignedUrls
+            }
+        });
+    } catch (error) {
+        console.error('Error generating upload URLs for assignment files:', error);
+        res.status(500).json({
+            success: false,
+            message: "업로드 URL 생성 중 오류가 발생했습니다.",
+            error: error.message
+        });
+    }
+});
 
 module.exports = router;

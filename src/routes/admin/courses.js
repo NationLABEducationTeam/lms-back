@@ -632,45 +632,6 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
         `;
         await client.query(updateQuery, [`nationslablmscoursebucket/${folderPath}`, courseId]);
 
-        // 평가 항목 생성 (출석, 과제, 시험)
-        console.log('📝 Creating grade items for course:', courseId);
-        console.log(`Creating ${weeks_count} attendance items, ${assignment_count} assignment items, and ${exam_count} exam items`);
-        
-        // 1. 출석 평가 항목 생성 (주차별로 생성)
-        for (let i = 1; i <= weeks_count; i++) {
-            await client.query(
-                `INSERT INTO ${SCHEMAS.GRADE}.grade_items 
-                (course_id, item_type, item_name, max_score, item_order)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING item_id`,
-                [courseId, 'ATTENDANCE', `${i}주차 출석`, 100, i]
-            );
-        }
-        
-        // 2. 과제 평가 항목 생성
-        for (let i = 1; i <= assignment_count; i++) {
-            await client.query(
-                `INSERT INTO ${SCHEMAS.GRADE}.grade_items 
-                (course_id, item_type, item_name, max_score, item_order)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING item_id`,
-                [courseId, 'ASSIGNMENT', `과제 ${i}`, 100, weeks_count + i]
-            );
-        }
-        
-        // 3. 시험 평가 항목 생성
-        const examNames = ['중간고사', '기말고사', '퀴즈 1', '퀴즈 2', '퀴즈 3'];
-        for (let i = 1; i <= exam_count; i++) {
-            const examName = i <= examNames.length ? examNames[i-1] : `시험 ${i}`;
-            await client.query(
-                `INSERT INTO ${SCHEMAS.GRADE}.grade_items 
-                (course_id, item_type, item_name, max_score, item_order)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING item_id`,
-                [courseId, 'EXAM', examName, 100, weeks_count + assignment_count + i]
-            );
-        }
-
         await client.query('COMMIT');
         console.log('✅ Transaction committed successfully');
 

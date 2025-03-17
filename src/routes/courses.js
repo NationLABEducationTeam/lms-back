@@ -9,6 +9,7 @@ const {
 const { HeadObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 const { s3Client } = require('../config/s3');
 const { transliterate } = require('transliteration');
+const { getStudentGrades } = require('../utils/grade-calculator');
 
 const TABLE_NAME = 'nationslab-courses';
 
@@ -609,100 +610,50 @@ function getFileType(fileName) {
     return typeMap[extension] || 'unknown';
 }
 
-// 학생 성적 조회
+/**
+ * 학생 성적 조회 API (최적화 버전)
+ * @route GET /:courseId/my-grades
+ */
 router.get('/:courseId/my-grades', verifyToken, async (req, res) => {
     const client = await masterPool.connect();
-    
     try {
+        // JWT의 sub 필드에서 사용자 ID 가져오기 
+        const studentId = req.user.sub;
         const { courseId } = req.params;
-        const studentId = req.user.sub;  // cognito user id from JWT token
-
-        // 수강 여부 확인
+        
+        console.log(`[DEBUG] 성적 조회: studentId=${studentId}, courseId=${courseId}`);
+        
+        // 학생 등록 여부 확인 (디버깅)
         const enrollmentCheck = await client.query(`
-            SELECT id FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS}
-            WHERE course_id = $1 AND student_id = $2 AND status = 'ACTIVE'
-        `, [courseId, studentId]);
-
-        if (enrollmentCheck.rows.length === 0) {
-            return res.status(403).json({
-                success: false,
-                message: '수강 중인 과목이 아닙니다.'
-            });
-        }
-
-        // 과목 정보와 성적 항목 조회
-        const result = await client.query(`
-            WITH grade_info AS (
-                SELECT 
-                    gi.type,
-                    gi.title,
-                    gi.max_score,
-                    sg.score
-                FROM ${SCHEMAS.GRADE}.grade_items gi
-                LEFT JOIN ${SCHEMAS.GRADE}.student_grades sg 
-                    ON gi.id = sg.grade_item_id 
-                    AND sg.student_id = $1
-                WHERE gi.course_id = $2
-            )
-            SELECT 
-                c.title as course_title,
-                c.attendance_weight,
-                c.assignment_weight,
-                c.exam_weight,
-                (
-                    SELECT json_agg(row_to_json(g))
-                    FROM (
-                        SELECT type, title, max_score, score
-                        FROM grade_info
-                        WHERE type = 'ASSIGNMENT'
-                    ) g
-                ) as assignments,
-                (
-                    SELECT json_agg(row_to_json(g))
-                    FROM (
-                        SELECT type, title, max_score, score
-                        FROM grade_info
-                        WHERE type = 'EXAM'
-                    ) g
-                ) as exams,
-                (
-                    SELECT COALESCE(AVG(CASE WHEN ar.total_duration_seconds > 0 
-                        THEN (ar.duration_seconds::float / ar.total_duration_seconds) * 100 
-                        ELSE 0 END), 0)
-                    FROM ${SCHEMAS.GRADE}.attendance_records ar
-                    WHERE ar.course_id = $2 AND ar.student_id = $1
-                ) as attendance_rate
-            FROM ${SCHEMAS.COURSE}.courses c
-            WHERE c.id = $2
+            SELECT id FROM ${SCHEMAS.ENROLLMENT}.enrollments 
+            WHERE student_id = $1 AND course_id = $2
         `, [studentId, courseId]);
-
-        if (result.rows.length === 0) {
+        
+        console.log(`[DEBUG] 학생 등록 정보:`, JSON.stringify(enrollmentCheck.rows));
+        
+        // 과제 항목 확인 (디버깅)
+        const assignmentCheck = await client.query(`
+            SELECT * FROM ${SCHEMAS.GRADE}.grade_items 
+            WHERE course_id = $1 AND item_type = 'ASSIGNMENT'
+        `, [courseId]);
+        
+        console.log(`[DEBUG] 과제 항목:`, JSON.stringify(assignmentCheck.rows));
+        
+        // 최적화된 성적 조회 함수 사용
+        const gradeInfo = await getStudentGrades(client, courseId, studentId);
+        
+        console.log(`[DEBUG] 성적 조회 결과:`, JSON.stringify(gradeInfo));
+        
+        if (!gradeInfo) {
             return res.status(404).json({
                 success: false,
                 message: "과목 정보를 찾을 수 없습니다."
             });
         }
-
-        const courseInfo = result.rows[0];
-
+        
         res.json({
             success: true,
-            data: {
-                course: {
-                    title: courseInfo.course_title,
-                    attendance_weight: courseInfo.attendance_weight,
-                    assignment_weight: courseInfo.assignment_weight,
-                    exam_weight: courseInfo.exam_weight
-                },
-                grades: {
-                    attendance: {
-                        rate: parseFloat(courseInfo.attendance_rate.toFixed(1)),
-                        score: parseFloat(((courseInfo.attendance_rate * courseInfo.attendance_weight) / 100).toFixed(1))
-                    },
-                    assignments: courseInfo.assignments || [],
-                    exams: courseInfo.exams || []
-                }
-            }
+            data: gradeInfo
         });
     } catch (error) {
         console.error('Error fetching grades:', error);

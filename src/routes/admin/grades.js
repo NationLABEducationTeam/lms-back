@@ -5,6 +5,12 @@ const { masterPool, SCHEMAS } = require('../../config/database');
 const { validateGradeItem, validateAttendance, validateGradeRules } = require('../../middlewares/validation');
 const { v4: uuidv4 } = require('uuid');
 const { generateUploadUrls, listAssignmentFiles } = require('../../utils/s3');
+const { 
+    updateFinalGrades, 
+    recordGradeHistory,
+    getGradeStatistics,
+    exportGradeData
+} = require('../../utils/grade-calculator');
 
 // 평가 항목 추가 (과제 또는 시험)
 router.post('/items', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
@@ -18,9 +24,10 @@ router.post('/items', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (
             throw new Error('평가 항목 유형은 ASSIGNMENT 또는 EXAM이어야 합니다.');
         }
 
-        // 과목 존재 여부 확인
+        // 과목 존재 여부 및 설정 확인
         const courseQuery = `
-            SELECT id FROM ${SCHEMAS.COURSE}.courses
+            SELECT id, assignment_count, exam_count 
+            FROM ${SCHEMAS.COURSE}.courses
             WHERE id = $1
         `;
         
@@ -30,31 +37,54 @@ router.post('/items', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (
             throw new Error('과목을 찾을 수 없습니다.');
         }
 
-        // 새 평가 항목 추가
+        // 현재 등록된 항목 수 확인
+        const currentCount = await client.query(
+            `SELECT COUNT(*) as count FROM ${SCHEMAS.GRADE}.grade_items 
+             WHERE course_id = $1 AND item_type = $2`,
+            [courseId, type]
+        );
+        
+        // 유형별 제한 확인
+        const limit = type === 'ASSIGNMENT' 
+            ? courseResult.rows[0].assignment_count 
+            : courseResult.rows[0].exam_count;
+            
+        if (currentCount.rows[0].count >= limit) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: `${type === 'ASSIGNMENT' ? '과제' : '시험'} 항목은 최대 ${limit}개까지 등록 가능합니다.`
+            });
+        }
+
+        // 현재 항목 순서 조회 (서브쿼리를 분리하여 매개변수 타입 불일치 문제 해결)
+        const orderResult = await client.query(
+            `SELECT COALESCE(MAX(item_order), 0) + 1 as next_order 
+             FROM ${SCHEMAS.GRADE}.grade_items 
+             WHERE course_id = $1 AND item_type = $2`,
+            [courseId, type]
+        );
+        
+        const nextOrder = orderResult.rows[0].next_order;
+
+        // 새 평가 항목 추가 (트리거가 자동으로 학생 기록 생성)
         const insertResult = await client.query(
             `INSERT INTO ${SCHEMAS.GRADE}.grade_items 
             (course_id, item_type, item_name, item_order, due_date)
-            VALUES ($1, $2, $3, (SELECT COALESCE(MAX(item_order), 0) + 1 FROM ${SCHEMAS.GRADE}.grade_items WHERE course_id = $1), $4)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING *`,
-            [courseId, type, title, due_date]
+            [courseId, type, title, nextOrder, due_date]
         );
 
         const itemId = insertResult.rows[0].item_id;
 
-        // 수강 중인 모든 학생들의 점수 초기화
-        await client.query(
-            `INSERT INTO ${SCHEMAS.GRADE}.student_grades 
-            (enrollment_id, item_id, score, is_completed, submission_date)
-            SELECT 
-                e.id,
-                $1,
-                0,
-                false,
-                NULL
-            FROM ${SCHEMAS.ENROLLMENT}.enrollments e
-            WHERE e.course_id = $2 AND e.status = 'ACTIVE'`,
-            [itemId, courseId]
+        // 학생 수 확인을 위한 로그
+        const studentCount = await client.query(
+            `SELECT COUNT(*) FROM ${SCHEMAS.GRADE}.student_grades WHERE item_id = $1`,
+            [itemId]
         );
+        
+        console.log(`평가 항목 ${itemId} 생성 완료, 학생 레코드 ${studentCount.rows[0].count}개 자동 생성됨`);
 
         await client.query('COMMIT');
         
@@ -457,12 +487,13 @@ router.put('/scores', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (
     try {
         await client.query('BEGIN');
 
-        const { gradeItemId, scores } = req.body;
+        const { gradeItemId, scores, reason } = req.body;
         // scores 형식: [{ enrollmentId: 'xxx', score: 85 }, ...]
+        const modifiedBy = req.user.id;
 
         // 평가 항목 존재 확인 및 정보 조회
         const gradeItemResult = await client.query(
-            `SELECT gi.*
+            `SELECT gi.*, c.id as course_id
             FROM ${SCHEMAS.GRADE}.grade_items gi
             JOIN ${SCHEMAS.COURSE}.courses c ON gi.course_id = c.id
             WHERE gi.item_id = $1`,
@@ -473,28 +504,67 @@ router.put('/scores', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (
             throw new Error('평가 항목을 찾을 수 없습니다.');
         }
 
+        const courseId = gradeItemResult.rows[0].course_id;
+        const updatedStudents = [];
+
         // 점수 유효성 검사 및 업데이트
         for (const { enrollmentId, score } of scores) {
             if (score < 0 || score > 100) {
                 throw new Error(`학생 ${enrollmentId}의 점수가 유효하지 않습니다. (0-100)`);
             }
 
-            // 점수 업데이트
-            await client.query(
-                `UPDATE ${SCHEMAS.GRADE}.student_grades
-                SET 
-                    score = $1, 
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE item_id = $2 AND enrollment_id = $3`,
-                [score, gradeItemId, enrollmentId]
+            // 기존 점수 조회
+            const currentScoreResult = await client.query(
+                `SELECT grade_id, score, e.student_id
+                FROM ${SCHEMAS.GRADE}.student_grades sg
+                JOIN ${SCHEMAS.ENROLLMENT}.enrollments e ON sg.enrollment_id = e.id
+                WHERE sg.item_id = $1 AND sg.enrollment_id = $2`,
+                [gradeItemId, enrollmentId]
             );
+
+            if (currentScoreResult.rows.length === 0) {
+                throw new Error(`학생 등록 정보를 찾을 수 없습니다.`);
+            }
+
+            const { grade_id, score: previousScore, student_id } = currentScoreResult.rows[0];
+
+            // 점수가 변경된 경우에만 업데이트 및 히스토리 기록
+            if (previousScore !== score) {
+                // 점수 업데이트
+                await client.query(
+                    `UPDATE ${SCHEMAS.GRADE}.student_grades
+                    SET 
+                        score = $1, 
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE grade_id = $2`,
+                    [score, grade_id]
+                );
+
+                // 히스토리 기록
+                await recordGradeHistory(
+                    client,
+                    grade_id,
+                    previousScore,
+                    score,
+                    modifiedBy,
+                    reason || '관리자에 의한 점수 수정'
+                );
+
+                updatedStudents.push(student_id);
+            }
+        }
+
+        // 성적이 변경된 학생들의 최종 성적 업데이트
+        for (const studentId of updatedStudents) {
+            await updateFinalGrades(client, courseId, studentId);
         }
 
         await client.query('COMMIT');
 
         res.json({
             success: true,
-            message: "점수가 업데이트되었습니다."
+            message: "점수가 업데이트되었습니다.",
+            updated_count: updatedStudents.length
         });
     } catch (error) {
         await client.query('ROLLBACK');
@@ -633,11 +703,13 @@ router.get('/course/:courseId/student/:studentId', verifyToken, async (req, res)
 router.post('/attendance', verifyToken, validateAttendance, async (req, res) => {
     const client = await masterPool.connect();
     try {
+        await client.query('BEGIN');
+        
         const { studentId, courseId, sessionType, sessionId, durationSeconds, totalDurationSeconds, attendanceDate } = req.body;
 
         // 기존 참여 기록 확인
         const existingRecord = await client.query(
-            `SELECT * FROM grade_schema.attendance_records
+            `SELECT * FROM ${SCHEMAS.GRADE}.attendance_records
             WHERE student_id = $1 AND course_id = $2 AND session_id = $3`,
             [studentId, courseId, sessionId]
         );
@@ -646,7 +718,7 @@ router.post('/attendance', verifyToken, validateAttendance, async (req, res) => 
         if (existingRecord.rows.length > 0) {
             // 기존 기록 업데이트
             result = await client.query(
-                `UPDATE grade_schema.attendance_records
+                `UPDATE ${SCHEMAS.GRADE}.attendance_records
                 SET duration_seconds = LEAST($4, $5),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE student_id = $1 AND course_id = $2 AND session_id = $3
@@ -656,7 +728,7 @@ router.post('/attendance', verifyToken, validateAttendance, async (req, res) => 
         } else {
             // 새 기록 생성
             result = await client.query(
-                `INSERT INTO grade_schema.attendance_records
+                `INSERT INTO ${SCHEMAS.GRADE}.attendance_records
                 (student_id, course_id, session_type, session_id, duration_seconds, total_duration_seconds, attendance_date)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                 RETURNING *`,
@@ -664,8 +736,10 @@ router.post('/attendance', verifyToken, validateAttendance, async (req, res) => 
             );
         }
 
-        // 출석률 계산 및 최종 성적 업데이트
+        // 출석률 계산 및 최종 성적 업데이트 - 최적화된 함수 사용
         await updateFinalGrades(client, courseId, studentId);
+        
+        await client.query('COMMIT');
 
         res.json({
             success: true,
@@ -673,6 +747,7 @@ router.post('/attendance', verifyToken, validateAttendance, async (req, res) => 
             data: result.rows[0]
         });
     } catch (error) {
+        await client.query('ROLLBACK');
         console.error('Error recording attendance:', error);
         res.status(500).json({
             success: false,
@@ -785,109 +860,77 @@ router.get('/final/:courseId/:studentId', verifyToken, async (req, res) => {
     }
 });
 
-// 헬퍼 함수: 최종 성적 업데이트
-async function updateFinalGrades(client, courseId, studentId) {
-    // 수강 정보 조회
-    const enrollmentResult = await client.query(
-        `SELECT id FROM ${SCHEMAS.ENROLLMENT}.enrollments
-        WHERE course_id = $1 AND student_id = $2`,
-        [courseId, studentId]
-    );
-
-    if (enrollmentResult.rows.length === 0) {
-        throw new Error('수강 정보를 찾을 수 없습니다.');
+// 성적 통계 조회 API 추가
+router.get('/statistics/:courseId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
+    const client = await masterPool.connect();
+    try {
+        const { courseId } = req.params;
+        
+        const statistics = await getGradeStatistics(client, courseId);
+        
+        if (!statistics) {
+            return res.status(404).json({
+                success: false,
+                message: "과목 정보를 찾을 수 없습니다."
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: statistics
+        });
+    } catch (error) {
+        console.error('Error fetching grade statistics:', error);
+        res.status(500).json({
+            success: false,
+            message: "성적 통계 조회 중 오류가 발생했습니다.",
+            error: error.message
+        });
+    } finally {
+        client.release();
     }
+});
 
-    const enrollmentId = enrollmentResult.rows[0].id;
-
-    // 출석률 계산
-    const attendanceResult = await client.query(
-        `SELECT 
-            COALESCE(SUM(duration_seconds), 0) as total_attended,
-            NULLIF(SUM(total_duration_seconds), 0) as total_required
-        FROM grade_schema.attendance_records
-        WHERE course_id = $1 AND student_id = $2`,
-        [courseId, studentId]
-    );
-
-    const { total_attended, total_required } = attendanceResult.rows[0];
-    const attendanceRate = total_required ? (total_attended / total_required) * 100 : 0;
-
-    // 과제 점수 계산 (수정된 부분)
-    const assignmentResult = await client.query(
-        `WITH assignment_weights AS (
-            SELECT COUNT(*) as total_items
-            FROM ${SCHEMAS.GRADE}.grade_items
-            WHERE course_id = $1 AND item_type = 'ASSIGNMENT'
-        )
-        SELECT 
-            COALESCE(
-                AVG(sg.score),
-                0
-            ) as weighted_assignment_score
-        FROM ${SCHEMAS.GRADE}.grade_items gi
-        LEFT JOIN ${SCHEMAS.GRADE}.student_grades sg 
-            ON gi.item_id = sg.item_id 
-            AND sg.enrollment_id = $3
-        WHERE gi.course_id = $1 
-        AND gi.item_type = 'ASSIGNMENT'`,
-        [courseId, studentId, enrollmentId]
-    );
-
-    // 시험 점수 계산 (동일한 방식으로 수정)
-    const examResult = await client.query(
-        `WITH exam_weights AS (
-            SELECT COUNT(*) as total_items
-            FROM ${SCHEMAS.GRADE}.grade_items
-            WHERE course_id = $1 AND item_type = 'EXAM'
-        )
-        SELECT 
-            COALESCE(
-                AVG(sg.score),
-                0
-            ) as weighted_exam_score
-        FROM ${SCHEMAS.GRADE}.grade_items gi
-        LEFT JOIN ${SCHEMAS.GRADE}.student_grades sg 
-            ON gi.item_id = sg.item_id 
-            AND sg.enrollment_id = $3
-        WHERE gi.course_id = $1 
-        AND gi.item_type = 'EXAM'`,
-        [courseId, studentId, enrollmentId]
-    );
-
-    // 규칙 조회
-    const rulesResult = await client.query(
-        `SELECT * FROM ${SCHEMAS.GRADE}.course_grade_rules
-        WHERE course_id = $1`,
-        [courseId]
-    );
-
-    const rules = rulesResult.rows[0];
-    const assignmentScore = assignmentResult.rows[0].weighted_assignment_score || 0;
-    const examScore = examResult.rows[0].weighted_exam_score || 0;
-
-    // 최종 성적 계산 및 업데이트
-    const totalScore = (
-        (attendanceRate * rules.attendance_weight / 100) +
-        (assignmentScore * rules.assignment_weight / 100) +
-        (examScore * rules.exam_weight / 100)
-    );
-
-    await client.query(
-        `INSERT INTO ${SCHEMAS.GRADE}.final_grades
-        (student_id, course_id, attendance_score, assignment_score, exam_score, total_score, attendance_rate)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (student_id, course_id)
-        DO UPDATE SET
-            attendance_score = EXCLUDED.attendance_score,
-            assignment_score = EXCLUDED.assignment_score,
-            exam_score = EXCLUDED.exam_score,
-            total_score = EXCLUDED.total_score,
-            attendance_rate = EXCLUDED.attendance_rate,
-            updated_at = CURRENT_TIMESTAMP`,
-        [studentId, courseId, attendanceRate, assignmentScore, examScore, totalScore, attendanceRate]
-    );
-}
+// 성적 엑셀 내보내기 API 추가
+router.get('/export/:courseId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
+    const client = await masterPool.connect();
+    try {
+        const { courseId } = req.params;
+        
+        // 과목 존재 여부 확인
+        const courseCheck = await client.query(
+            `SELECT title FROM ${SCHEMAS.COURSE}.courses WHERE id = $1`,
+            [courseId]
+        );
+        
+        if (courseCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "과목을 찾을 수 없습니다."
+            });
+        }
+        
+        const courseTitle = courseCheck.rows[0].title;
+        const gradeData = await exportGradeData(client, courseId);
+        
+        res.json({
+            success: true,
+            data: {
+                courseTitle,
+                students: gradeData
+            }
+        });
+    } catch (error) {
+        console.error('Error exporting grades:', error);
+        res.status(500).json({
+            success: false,
+            message: "성적 내보내기 중 오류가 발생했습니다.",
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
 
 // 평가 항목 파일 목록 조회
 router.get('/items/:itemId/files', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR', 'STUDENT']), async (req, res) => {

@@ -156,6 +156,9 @@ async function getGradeStatistics(client, courseId) {
             c.attendance_weight,
             c.assignment_weight,
             c.exam_weight,
+            c.weeks_count,
+            c.assignment_count,
+            c.exam_count,
             json_agg(
                 json_build_object(
                     'id', gs.item_id,
@@ -176,7 +179,7 @@ async function getGradeStatistics(client, courseId) {
         FROM ${SCHEMAS.COURSE}.courses c
         LEFT JOIN grade_stats gs ON true
         WHERE c.id = $1
-        GROUP BY c.id, c.title, c.attendance_weight, c.assignment_weight, c.exam_weight
+        GROUP BY c.id, c.title, c.attendance_weight, c.assignment_weight, c.exam_weight, c.weeks_count, c.assignment_count, c.exam_count
     `, [courseId]);
 
     return result.rows[0] || null;
@@ -229,7 +232,21 @@ async function getStudentGrades(client, courseId, studentId) {
                 CASE WHEN SUM(total_duration_seconds) > 0 
                     THEN (SUM(duration_seconds)::float / SUM(total_duration_seconds)) * 100 
                     ELSE 0 
-                END as rate
+                END as rate,
+                COUNT(*) as total_sessions,
+                COALESCE(json_agg(
+                    json_build_object(
+                        'date', attendance_date,
+                        'sessionType', session_type,
+                        'sessionId', session_id,
+                        'durationSeconds', duration_seconds,
+                        'totalDurationSeconds', total_duration_seconds,
+                        'attendanceRate', CASE WHEN total_duration_seconds > 0 
+                            THEN (duration_seconds::float / total_duration_seconds) * 100 
+                            ELSE 0 
+                        END
+                    )
+                ) FILTER (WHERE record_id IS NOT NULL), '[]') as sessions_data
             FROM ${SCHEMAS.GRADE}.attendance_records
             WHERE course_id = $1 AND student_id = $2
         ),
@@ -252,7 +269,7 @@ async function getStudentGrades(client, courseId, studentId) {
                     ) FILTER (WHERE gi.item_id IS NOT NULL), 
                     '[]'
                 ) as items,
-                COALESCE(AVG(sg.score), 0) as avg_score
+                COALESCE(AVG(CASE WHEN sg.score IS NULL THEN 0 ELSE COALESCE(sg.score::numeric, 0) END), 0) as avg_score
             FROM grade_items gi
             LEFT JOIN enrollment_info ei ON true
             LEFT JOIN ${SCHEMAS.GRADE}.student_grades sg 
@@ -273,7 +290,7 @@ async function getStudentGrades(client, courseId, studentId) {
                     ) FILTER (WHERE gi.item_id IS NOT NULL),
                     '[]'
                 ) as items,
-                COALESCE(AVG(sg.score), 0) as avg_score
+                COALESCE(AVG(CASE WHEN sg.score IS NULL THEN 0 ELSE COALESCE(sg.score::numeric, 0) END), 0) as avg_score
             FROM grade_items gi
             LEFT JOIN enrollment_info ei ON true
             LEFT JOIN ${SCHEMAS.GRADE}.student_grades sg 
@@ -285,13 +302,18 @@ async function getStudentGrades(client, courseId, studentId) {
             c.attendance_weight,
             c.assignment_weight,
             c.exam_weight,
+            c.weeks_count,
+            c.assignment_count,
+            c.exam_count,
             ar.rate as attendance_rate,
+            ar.total_sessions,
+            ar.sessions_data as attendance_sessions,
             a.items as assignments,
             a.avg_score as assignment_score,
             e.items as exams,
             e.avg_score as exam_score,
             (
-                (ar.rate * c.attendance_weight / 100) +
+                (COALESCE(ar.rate, 0) * c.attendance_weight / 100) +
                 (COALESCE(a.avg_score, 0) * c.assignment_weight / 100) +
                 (COALESCE(e.avg_score, 0) * c.exam_weight / 100)
             ) as total_score
@@ -310,15 +332,15 @@ async function getStudentGrades(client, courseId, studentId) {
     const attendanceRate = parseFloat((gradeInfo.attendance_rate || 0).toFixed(1));
     
     // 숫자형 확인 및 기본값 처리
-    const assignmentScore = typeof gradeInfo.assignment_score === 'number' 
+    let assignmentScore = typeof gradeInfo.assignment_score === 'number' 
         ? parseFloat(gradeInfo.assignment_score.toFixed(1)) 
         : 0;
         
-    const examScore = typeof gradeInfo.exam_score === 'number' 
+    let examScore = typeof gradeInfo.exam_score === 'number' 
         ? parseFloat(gradeInfo.exam_score.toFixed(1)) 
         : 0;
         
-    const totalScore = typeof gradeInfo.total_score === 'number' 
+    let totalScore = typeof gradeInfo.total_score === 'number' 
         ? parseFloat(gradeInfo.total_score.toFixed(1)) 
         : 0;
     
@@ -346,25 +368,114 @@ async function getStudentGrades(client, courseId, studentId) {
     assignments = Array.isArray(assignments) ? assignments : [];
     exams = Array.isArray(exams) ? exams : [];
     
-    console.log('[DEBUG] Parsed assignments:', assignments);
+    // 점수 처리 개선: 각 항목별 점수가 숫자인지 확인하고 변환
+    assignments = assignments.map(item => ({
+        ...item,
+        score: typeof item.score === 'number' ? item.score : 
+               typeof item.score === 'string' && !isNaN(parseFloat(item.score)) ? parseFloat(item.score) : 0
+    }));
+    
+    exams = exams.map(item => ({
+        ...item,
+        score: typeof item.score === 'number' ? item.score : 
+              typeof item.score === 'string' && !isNaN(parseFloat(item.score)) ? parseFloat(item.score) : 0
+    }));
+    
+    // 출석 기록이 문자열인 경우 파싱
+    let attendanceSessions = gradeInfo.attendance_sessions;
+    if (typeof attendanceSessions === 'string') {
+        try {
+            attendanceSessions = JSON.parse(attendanceSessions);
+        } catch (e) {
+            attendanceSessions = [];
+        }
+    }
+    
+    // 배열이 아닌 경우 빈 배열로 변환
+    attendanceSessions = Array.isArray(attendanceSessions) ? attendanceSessions : [];
+    
+    // 진행률 및 총점 계산 방식 개선: 모든 항목 만점 대비 현재 점수 비율로 계산
+    // 출석 세션 점수 계산 (모든 세션 100점 만점 기준)
+    const totalAttendanceSessions = gradeInfo.weeks_count || 16; // 총 출석 세션 수 (주차 수 기준)
+    const totalAttendancePoints = totalAttendanceSessions * 100; // 출석 만점 (각 세션 100점 기준)
+    const earnedAttendancePoints = attendanceSessions.reduce((sum, session) => {
+        // 세션별 출석률을 점수로 환산 (출석률이 80% 이상이면 100점, 그 외는 출석률에 비례)
+        const sessionScore = session.attendanceRate >= 80 ? 100 : session.attendanceRate;
+        return sum + sessionScore;
+    }, 0);
+
+    // 과제 점수 계산 (모든 과제 100점 만점 기준)
+    const totalAssignmentCount = gradeInfo.assignment_count || 1; // 총 과제 수
+    const totalAssignmentPoints = totalAssignmentCount * 100; // 과제 만점
+    const earnedAssignmentPoints = assignments.reduce((sum, item) => {
+        return sum + (item.isCompleted ? item.score : 0);
+    }, 0);
+
+    // 시험 점수 계산 (모든 시험 100점 만점 기준)
+    const totalExamCount = gradeInfo.exam_count || 1; // 총 시험 수
+    const totalExamPoints = totalExamCount * 100; // 시험 만점
+    const earnedExamPoints = exams.reduce((sum, item) => {
+        return sum + (item.isCompleted ? item.score : 0);
+    }, 0);
+
+    // 총점 가능 점수 (모든 항목 만점)
+    const totalPossiblePoints = totalAttendancePoints + totalAssignmentPoints + totalExamPoints;
+
+    // 획득 점수
+    const totalEarnedPoints = earnedAttendancePoints + earnedAssignmentPoints + earnedExamPoints;
+
+    // 완료율 계산
+    const attendanceCompletionRate = parseFloat(((earnedAttendancePoints / totalAttendancePoints) * 100).toFixed(1));
+    const assignmentCompletionRate = parseFloat(((earnedAssignmentPoints / totalAssignmentPoints) * 100).toFixed(1));
+    const examCompletionRate = parseFloat(((earnedExamPoints / totalExamPoints) * 100).toFixed(1));
+
+    // 전체 진행률 (획득 점수 / 가능 점수)
+    const progressRate = parseFloat(((totalEarnedPoints / totalPossiblePoints) * 100).toFixed(1));
+
+    // 가중치 적용 총점
+    totalScore = parseFloat((
+        (earnedAttendancePoints / totalAttendancePoints * 100 * gradeInfo.attendance_weight / 100) +
+        (earnedAssignmentPoints / totalAssignmentPoints * 100 * gradeInfo.assignment_weight / 100) +
+        (earnedExamPoints / totalExamPoints * 100 * gradeInfo.exam_weight / 100)
+    ).toFixed(1));
+
+    console.log('[DEBUG] 출석 점수:', earnedAttendancePoints, '/', totalAttendancePoints);
+    console.log('[DEBUG] 과제 점수:', earnedAssignmentPoints, '/', totalAssignmentPoints);
+    console.log('[DEBUG] 시험 점수:', earnedExamPoints, '/', totalExamPoints);
+    console.log('[DEBUG] 총 획득 점수:', totalEarnedPoints, '/', totalPossiblePoints);
+    console.log('[DEBUG] 진행률:', progressRate);
+    console.log('[DEBUG] 가중치 적용 총점:', totalScore);
     
     return {
         course: {
             title: gradeInfo.course_title,
             attendance_weight: gradeInfo.attendance_weight,
             assignment_weight: gradeInfo.assignment_weight,
-            exam_weight: gradeInfo.exam_weight
+            exam_weight: gradeInfo.exam_weight,
+            weeks_count: gradeInfo.weeks_count || 16,
+            assignment_count: gradeInfo.assignment_count || 1,
+            exam_count: gradeInfo.exam_count || 1
         },
         grades: {
             attendance: {
                 rate: attendanceRate,
-                score: parseFloat(((attendanceRate * gradeInfo.attendance_weight) / 100).toFixed(1))
+                score: parseFloat(((attendanceRate * gradeInfo.attendance_weight) / 100).toFixed(1)),
+                sessions: attendanceSessions,
+                totalSessions: totalAttendanceSessions,
+                completionRate: attendanceCompletionRate,
+                earnedPoints: earnedAttendancePoints,
+                totalPoints: totalAttendancePoints
             },
             assignments: assignments,
             exams: exams,
             assignment_score: assignmentScore,
             exam_score: examScore,
-            total_score: totalScore
+            assignment_completion_rate: assignmentCompletionRate,
+            exam_completion_rate: examCompletionRate,
+            progress_rate: progressRate,
+            total_score: totalScore,
+            total_earned_points: totalEarnedPoints,
+            total_possible_points: totalPossiblePoints
         }
     };
 }

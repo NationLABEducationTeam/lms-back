@@ -36,7 +36,6 @@ router.get('/my', verifyToken, async (req, res) => {
                 gi.due_date,
                 c.id AS course_id,
                 c.title AS course_title,
-                c.thumbnail_url,
                 COALESCE(sg.score, 0) AS score,
                 COALESCE(sg.is_completed, false) AS is_completed,
                 CASE 
@@ -240,9 +239,17 @@ router.post('/:assignmentId/submit', verifyToken, async (req, res) => {
         // JWT의 sub 필드에서 사용자 ID 가져오기
         const studentId = req.user.sub;
         const { assignmentId } = req.params;
-        const { submission_data } = req.body;
+        const { submission_data, score } = req.body;
         
-        if (!submission_data) {
+        // score가 있으면 퀴즈 제출로 간주, submission_data가 없어도 기본 객체 생성
+        let submissionData = submission_data || {};
+        
+        // score가 있으면 submission_data에 포함
+        if (score !== undefined) {
+            submissionData = { ...submissionData, score };
+        }
+        
+        if (!submissionData && !score) {
             return res.status(400).json({
                 success: false, 
                 message: "제출 데이터가 없습니다."
@@ -303,7 +310,7 @@ router.post('/:assignmentId/submit', verifyToken, async (req, res) => {
                     submission_date = NOW(),
                     updated_at = NOW()
                 WHERE grade_id = $2
-            `, [submission_data, gradeId]);
+            `, [submissionData, gradeId]);
         } else {
             // 새로운 제출 생성
             const insertResult = await client.query(`
@@ -311,22 +318,32 @@ router.post('/:assignmentId/submit', verifyToken, async (req, res) => {
                 (enrollment_id, item_id, score, is_completed, submission_date, submission_data)
                 VALUES ($1, $2, $3, true, NOW(), $4)
                 RETURNING grade_id
-            `, [enrollmentId, assignmentId, initialScore, submission_data]);
+            `, [enrollmentId, assignmentId, initialScore, submissionData]);
             
             gradeId = insertResult.rows[0].grade_id;
         }
         
-        // 퀴즈인 경우 자동 채점 (추후 구현)
+        // 퀴즈인 경우 자동 채점
         let finalScore = initialScore;
         if (itemType === 'QUIZ') {
-            // TODO: 퀴즈 자동 채점 로직
-            // finalScore = calculateQuizScore(submission_data);
-            
-            // await client.query(`
-            //     UPDATE ${SCHEMAS.GRADE}.student_grades
-            //     SET score = $1
-            //     WHERE grade_id = $2
-            // `, [finalScore, gradeId]);
+            // 점수가 직접 본문에 있거나 submission_data 내에 있는 경우 모두 처리
+            if (score !== undefined) {
+                finalScore = score;
+                
+                console.log(`퀴즈 채점 - 학생 ID: ${req.user.sub}, 퀴즈 ID: ${assignmentId}, 점수: ${finalScore}`);
+                
+                // 점수 업데이트
+                await client.query(`
+                    UPDATE ${SCHEMAS.GRADE}.student_grades
+                    SET score = $1
+                    WHERE grade_id = $2
+                `, [finalScore, gradeId]);
+            } else {
+                return res.status(400).json({
+                    success: false,
+                    message: "퀴즈 제출 시 점수(score)가 필요합니다."
+                });
+            }
         }
         
         await client.query('COMMIT');

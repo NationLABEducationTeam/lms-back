@@ -932,8 +932,8 @@ router.get('/meeting/:meetingId', async (req, res) => {
     }
 });
 
-// 대시보드용 Zoom 세션 요약 정보 API
-router.get('/dashboard-summary', verifyToken, requireRole(['ADMIN']), async (req, res) => {
+// 진행 중인 미팅에 초점을 맞춘 간소화된 대시보드 요약 API
+router.get('/dashboard-summary', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     try {
         // Zoom API 토큰 발급
         const token = await getZoomToken();
@@ -944,7 +944,7 @@ router.get('/dashboard-summary', verifyToken, requireRole(['ADMIN']), async (req
         const userInfo = liveMeetingsData.userInfo;
         const liveMeetingsResponse = liveMeetingsData.meetings;
         
-        // 예정된 미팅 목록 조회 (오늘 이후)
+        // 예정된 미팅 목록 조회 - 간소화 (가장 가까운 3개만)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         
@@ -955,20 +955,191 @@ router.get('/dashboard-summary', verifyToken, requireRole(['ADMIN']), async (req
                     'Authorization': `Bearer ${token}`
                 },
                 params: {
-                    type: 'scheduled', // 예정된 미팅만 조회
-                    page_size: 100
+                    type: 'scheduled',
+                    page_size: 10
                 }
             }
         );
         
-        // 오늘 이후 예정된 미팅만 필터링
-        const upcomingMeetings = scheduledMeetingsResponse.data.meetings.filter(meeting => {
-            if (!meeting.start_time) return false;
-            const meetingDate = new Date(meeting.start_time);
-            return meetingDate >= today;
-        }).sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+        // 오늘 이후 예정된 미팅만 필터링 (최대 3개) - 진행 중인 미팅 제외
+        const upcomingMeetings = scheduledMeetingsResponse.data.meetings
+            .filter(meeting => {
+                // 시작 시간이 없는 경우 제외
+                if (!meeting.start_time) return false;
+                
+                // 시작 시간이 현재보다 미래인 경우만 포함
+                const meetingDate = new Date(meeting.start_time);
+                const now = new Date();
+                
+                // 진행 중인 미팅인지 확인 (liveMeetingsResponse.meetings에 존재하는지)
+                const isLiveMeeting = liveMeetingsResponse.meetings && 
+                                      liveMeetingsResponse.meetings.some(live => live.id === meeting.id);
+                
+                // 미래의 미팅이면서 현재 진행 중이 아닌 미팅만 포함
+                return meetingDate > now && !isLiveMeeting;
+            })
+            .sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
+            .slice(0, 3)
+            .map(meeting => ({
+                id: meeting.id,
+                topic: meeting.topic,
+                start_time: meeting.start_time,
+                duration: meeting.duration,
+                join_url: meeting.join_url
+            }));
         
-        // 최근 종료된 미팅 조회 (지난 7일)
+        // DB에서 미팅 ID와 코스 정보 매핑 데이터 미리 조회
+        const client = await masterPool.connect();
+        let meetingToCourseMap = {};
+        
+        try {
+            // zoom_meetings 테이블을 통해 미팅 ID와 코스 정보 매핑
+            const dbResult = await client.query(`
+                SELECT zm.zoom_meeting_id, c.id as course_id, c.title as course_title
+                FROM ${SCHEMAS.COURSE}.zoom_meetings zm
+                JOIN ${SCHEMAS.COURSE}.courses c ON zm.course_id = c.id
+            `);
+            
+            // 미팅 ID를 키로 한 해시맵 생성
+            if (dbResult.rows.length > 0) {
+                dbResult.rows.forEach(row => {
+                    meetingToCourseMap[row.zoom_meeting_id] = {
+                        course_id: row.course_id,
+                        course_title: row.course_title
+                    };
+                });
+            }
+        } catch (dbError) {
+            console.error('DB 조회 오류:', dbError);
+        } finally {
+            client.release();
+        }
+        
+        // 현재 진행 중인 미팅에 대한 참가자 정보 수집 - 간소화
+        const simplifiedLiveMeetings = [];
+        
+        if (liveMeetingsResponse.meetings && liveMeetingsResponse.meetings.length > 0) {
+            for (const meeting of liveMeetingsResponse.meetings) {
+                try {
+                    // 참가자 정보 조회 - 여러 API 엔드포인트 시도
+                    let participants = [];
+                    let participantsFetched = false;
+                    
+                    // 1. 먼저 실시간 참가자 시도 (Dashboard API)
+                    try {
+                        const response = await axios.get(
+                            `https://api.zoom.us/v2/metrics/meetings/${meeting.id}/participants`,
+                            {
+                                headers: {
+                                    'Authorization': `Bearer ${token}`
+                                },
+                                params: {
+                                    page_size: 300,
+                                    type: 'live'
+                                }
+                            }
+                        );
+                        
+                        if (response.data && response.data.participants && response.data.participants.length > 0) {
+                            participants = response.data.participants;
+                            participantsFetched = true;
+                        }
+                    } catch (error) {
+                        console.log('Dashboard API 참가자 조회 실패:', error.message);
+                    }
+                    
+                    // 2. 실패 시 미팅 참가자 API 시도 (Meeting API)
+                    if (!participantsFetched) {
+                        try {
+                            const response = await axios.get(
+                                `https://api.zoom.us/v2/meetings/${meeting.id}/participants`,
+                                {
+                                    headers: {
+                                        'Authorization': `Bearer ${token}`
+                                    },
+                                    params: {
+                                        page_size: 300
+                                    }
+                                }
+                            );
+                            
+                            if (response.data && response.data.participants && response.data.participants.length > 0) {
+                                participants = response.data.participants;
+                                participantsFetched = true;
+                            }
+                        } catch (error) {
+                            console.log('Meeting API 참가자 조회 실패:', error.message);
+                        }
+                    }
+                    
+                    // 3. 실패 시 과거 미팅 참가자 API 시도 (Past Meeting API)
+                    if (!participantsFetched) {
+                        try {
+                            const response = await axios.get(
+                                `https://api.zoom.us/v2/past_meetings/${meeting.id}/participants`,
+                                {
+                                    headers: {
+                                        'Authorization': `Bearer ${token}`
+                                    },
+                                    params: {
+                                        page_size: 300
+                                    }
+                                }
+                            );
+                            
+                            if (response.data && response.data.participants && response.data.participants.length > 0) {
+                                participants = response.data.participants;
+                                participantsFetched = true;
+                            }
+                        } catch (error) {
+                            console.log('Past Meeting API 참가자 조회 실패:', error.message);
+                        }
+                    }
+                    
+                    // 미리 조회한 맵에서 코스 정보 조회
+                    const courseInfo = meetingToCourseMap[meeting.id.toString()] || null;
+                    
+                    // 매우 간소화된 참가자 정보
+                    const simplifiedParticipants = participants.map(participant => ({
+                        name: participant.user_name || participant.name,
+                        email: participant.user_email || '',
+                        join_time: participant.join_time
+                    }));
+                    
+                    // 미팅 시작 시간과 현재 시간으로 미팅 진행 시간 계산 (분 단위)
+                    let meetingDuration = 0;
+                    if (meeting.start_time) {
+                        const meetingStartTime = new Date(meeting.start_time);
+                        meetingDuration = Math.floor((new Date() - meetingStartTime) / (1000 * 60));
+                    }
+                    
+                    // 매우 간소화된 미팅 정보
+                    simplifiedLiveMeetings.push({
+                        id: meeting.id,
+                        topic: meeting.topic,
+                        start_time: meeting.start_time,
+                        duration: meeting.duration,
+                        course_id: courseInfo?.course_id || null,
+                        course_title: courseInfo?.course_title || null,
+                        participant_count: simplifiedParticipants.length,
+                        participants: simplifiedParticipants
+                    });
+                } catch (error) {
+                    console.error(`미팅 ${meeting.id} 참가자 조회 실패:`, error.message);
+                    // 기본 정보만 포함
+                    simplifiedLiveMeetings.push({
+                        id: meeting.id,
+                        topic: meeting.topic,
+                        start_time: meeting.start_time,
+                        duration: meeting.duration,
+                        participant_count: 0,
+                        participants: []
+                    });
+                }
+            }
+        }
+        
+        // 최근 종료된 미팅 - 매우 간소화 (최대 3개)
         const pastMeetingsResponse = await axios.get(
             `https://api.zoom.us/v2/users/${userId}/meetings`,
             {
@@ -976,106 +1147,55 @@ router.get('/dashboard-summary', verifyToken, requireRole(['ADMIN']), async (req
                     'Authorization': `Bearer ${token}`
                 },
                 params: {
-                    type: 'past', // 지난 미팅만 조회
-                    page_size: 30
+                    type: 'past',
+                    page_size: 10
                 }
             }
         );
         
-        // 최근 7일 이내 종료된 미팅만 필터링
-        const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        // 실제로 종료된 미팅만 필터링
+        const recentPastMeetings = pastMeetingsResponse.data.meetings
+            .filter(meeting => {
+                if (!meeting.start_time) return false;
+                
+                // 시작 시간이 현재보다 과거인지 확인
+                const meetingDate = new Date(meeting.start_time);
+                const now = new Date();
+                const meetingEndTime = new Date(meetingDate);
+                meetingEndTime.setMinutes(meetingEndTime.getMinutes() + (meeting.duration || 60)); // 종료 시간 계산
+                
+                // 미팅이 이미 종료되었는지 확인 (종료 시간 < 현재 시간)
+                const isMeetingEnded = meetingEndTime < now;
+                
+                // 진행 중인 미팅인지 확인
+                const isLiveMeeting = liveMeetingsResponse.meetings && 
+                                      liveMeetingsResponse.meetings.some(live => live.id === meeting.id);
+                
+                // 종료된 미팅이고 현재 진행 중이 아닌 미팅만 포함
+                return isMeetingEnded && !isLiveMeeting;
+            })
+            .sort((a, b) => new Date(b.start_time) - new Date(a.start_time)) // 최신순 정렬
+            .slice(0, 3)
+            .map(meeting => ({
+                id: meeting.id,
+                topic: meeting.topic,
+                start_time: meeting.start_time,
+                duration: meeting.duration
+            }));
         
-        const recentPastMeetings = pastMeetingsResponse.data.meetings.filter(meeting => {
-            if (!meeting.start_time) return false;
-            const meetingDate = new Date(meeting.start_time);
-            return meetingDate >= sevenDaysAgo && meetingDate <= new Date();
-        }).sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
-        
-        // 데이터베이스에서 강의 정보 조회
-        const client = await masterPool.connect();
-        let courseData = [];
-        
-        try {
-            // 데이터베이스에서 Zoom 미팅 정보 조회
-            const dbResult = await client.query(
-                `SELECT zm.*, c.title as course_title 
-                 FROM ${SCHEMAS.COURSE}.zoom_meetings zm
-                 LEFT JOIN ${SCHEMAS.COURSE}.courses c ON zm.course_id = c.id
-                 ORDER BY zm.start_time DESC
-                 LIMIT 50`
-            );
-            
-            courseData = dbResult.rows;
-        } catch (dbError) {
-            console.error('DB 조회 오류:', dbError);
-        } finally {
-            client.release();
-        }
-        
-        // 현재 진행 중인 미팅에 대한 참가자 정보 수집
-        const liveMeetingsWithParticipants = [];
-        
-        if (liveMeetingsResponse.meetings && liveMeetingsResponse.meetings.length > 0) {
-            for (const meeting of liveMeetingsResponse.meetings) {
-                try {
-                    // 참가자 정보 조회
-                    const participantsResponse = await axios.get(
-                        `https://api.zoom.us/v2/metrics/meetings/${meeting.id}/participants`,
-                        {
-                            headers: {
-                                'Authorization': `Bearer ${token}`
-                            },
-                            params: {
-                                page_size: 100,
-                                type: 'live'
-                            }
-                        }
-                    );
-                    
-                    // 미팅 정보와 참가자 정보 결합
-                    liveMeetingsWithParticipants.push({
-                        meeting: meeting,
-                        participants: participantsResponse.data.participants || [],
-                        participant_count: participantsResponse.data.participants ? participantsResponse.data.participants.length : 0
-                    });
-                } catch (error) {
-                    // 참가자 정보 조회 실패 시 빈 배열로 처리
-                    liveMeetingsWithParticipants.push({
-                        meeting: meeting,
-                        participants: [],
-                        participant_count: 0,
-                        error: error.response?.data?.message || error.message
-                    });
-                }
-            }
-        }
-        
-        // 응답 데이터 구성
+        // 매우 간소화된 응답 데이터
         const responseData = {
-            account_info: {
-                id: userInfo.id,
-                email: userInfo.email,
-                first_name: userInfo.first_name,
-                last_name: userInfo.last_name,
-                status: userInfo.status,
-                plan_type: userInfo.type
-            },
             live_meetings: {
-                count: liveMeetingsResponse.meetings ? liveMeetingsResponse.meetings.length : 0,
-                meetings: liveMeetingsWithParticipants
+                count: simplifiedLiveMeetings.length,
+                meetings: simplifiedLiveMeetings
             },
             upcoming_meetings: {
                 count: upcomingMeetings.length,
-                meetings: upcomingMeetings.slice(0, 5) // 가장 가까운 5개만 반환
+                meetings: upcomingMeetings
             },
             recent_past_meetings: {
                 count: recentPastMeetings.length,
-                meetings: recentPastMeetings.slice(0, 5) // 가장 최근 5개만 반환
-            },
-            course_meetings: {
-                count: courseData.length,
-                meetings: courseData.slice(0, 10) // 최근 10개만 반환
+                meetings: recentPastMeetings
             },
             timestamp: new Date().toISOString()
         };

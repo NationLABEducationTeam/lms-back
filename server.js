@@ -28,6 +28,7 @@ const authRoutes = require('./src/routes/auth');
 const timemarksRouter = require('./src/routes/timemarks');
 const assignmentsRouter = require('./src/routes/assignments');
 const adminAssignmentsRouter = require('./src/routes/admin/assignments');
+const adminAttendanceRouter = require('./src/routes/admin/attendance');
 
 const app = express();
 
@@ -123,6 +124,7 @@ app.use(`${API_PREFIX}/admin/grades`, require('./src/routes/admin/grades'));
 app.use(`${API_PREFIX}/admin/assignments`, adminAssignmentsRouter);
 app.use(`${API_PREFIX}/admin/zoom`, require('./src/routes/admin/zoom'));
 app.use(`${API_PREFIX}/admin/zoom-test`, require('./src/routes/admin/zoom-test'));
+app.use(`${API_PREFIX}/admin/attendance`, adminAttendanceRouter);
 app.use(`${API_PREFIX}/timemarks`, timemarksRouter);
 app.use(`${API_PREFIX}/assignments`, assignmentsRouter);
 app.use('/auth', authRoutes);

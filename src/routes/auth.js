@@ -4,7 +4,7 @@ const { masterPool, SCHEMAS, TABLES } = require('../config/database');
 
 // Valid enum values
 const VALID_ROLES = ['STUDENT', 'INSTRUCTOR', 'ADMIN'];
-const VALID_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED'];
+const VALID_STATUSES = ['ACTIVE', 'COMPLETED', 'DROPPED'];
 
 /**
  * Cognito 회원가입 후 RDS에 사용자 정보를 동기화하는 엔드포인트

@@ -10,7 +10,7 @@ router.get('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
         const query = `
             SELECT 
                 u.cognito_user_id,
-                u.name,
+                u.given_name,
                 u.email,
                 u.role,
                 u.created_at,
@@ -55,7 +55,7 @@ router.get('/:userId', verifyToken, async (req, res) => {
         const query = `
             SELECT 
                 u.cognito_user_id,
-                u.name,
+                u.given_name,
                 u.email,
                 u.role,
                 u.created_at,

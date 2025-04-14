@@ -128,7 +128,7 @@ router.get('/course/:courseId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']
         const query = `
             SELECT 
                 e.*,
-                u.name as student_name,
+                u.given_name as student_name,
                 u.email as student_email,
                 pt.progress_status,
                 pt.last_accessed_at,

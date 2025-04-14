@@ -454,7 +454,7 @@ async function getStudentGrades(client, courseId, studentId) {
             exam_weight: gradeInfo.exam_weight,
             weeks_count: gradeInfo.weeks_count || 16,
             assignment_count: gradeInfo.assignment_count || 1,
-            exam_count: gradeInfo.exam_count || 1
+            exam_count: gradeInfo.exam_count !== null && gradeInfo.exam_count !== undefined ? gradeInfo.exam_count : 0
         },
         grades: {
             attendance: {

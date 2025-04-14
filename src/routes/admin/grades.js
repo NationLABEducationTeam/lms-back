@@ -823,7 +823,7 @@ router.get('/final/:courseId/:studentId', verifyToken, async (req, res) => {
         const result = await client.query(
             `SELECT 
                 fg.*,
-                u.name as student_name,
+                u.given_name as student_name,
                 c.title as course_title,
                 cgr.attendance_weight,
                 cgr.assignment_weight,

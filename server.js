@@ -125,6 +125,7 @@ app.use(`${API_PREFIX}/admin/assignments`, adminAssignmentsRouter);
 app.use(`${API_PREFIX}/admin/zoom`, require('./src/routes/admin/zoom'));
 app.use(`${API_PREFIX}/admin/zoom-test`, require('./src/routes/admin/zoom-test'));
 app.use(`${API_PREFIX}/admin/attendance`, adminAttendanceRouter);
+app.use(`${API_PREFIX}/admin/enrollments`, require('./src/routes/admin/enrollments'));
 app.use(`${API_PREFIX}/timemarks`, timemarksRouter);
 app.use(`${API_PREFIX}/assignments`, assignmentsRouter);
 app.use('/auth', authRoutes);

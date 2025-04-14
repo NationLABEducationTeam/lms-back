@@ -44,7 +44,7 @@ router.get('/public', async (req, res) => {
         const query = `
             SELECT 
                 c.*,
-                u.name as instructor_name,
+                u.given_name as instructor_name,
                 c.classmode
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
             LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
@@ -79,7 +79,7 @@ router.get('/public/:courseId', async (req, res) => {
         const query = `
             SELECT 
                 c.*,
-                u.name as instructor_name,
+                u.given_name as instructor_name,
                 u.cognito_user_id as instructor_id,
                 c.classmode
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
@@ -122,7 +122,7 @@ router.get('/', async (req, res) => {
         const query = `
             SELECT 
                 c.*,
-                u.name as instructor_name
+                u.given_name as instructor_name
             FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
             LEFT JOIN ${SCHEMAS.AUTH}.${TABLES.AUTH.USERS} u 
                 ON c.instructor_id = u.cognito_user_id
@@ -158,7 +158,7 @@ router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
         const query = `
             SELECT 
                 c.*,
-                u.name as instructor_name,
+                u.given_name as instructor_name,
                 u.cognito_user_id as instructor_id,
                 c.classmode,
                 c.zoom_link
@@ -382,12 +382,13 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
         const query = `
             SELECT 
                 c.*,
-                u.name as instructor_name,
+                u.given_name as instructor_name,
                 e.enrolled_at,
                 e.status as enrollment_status,
                 pt.progress_status,
                 pt.last_accessed_at,
-                c.classmode
+                c.classmode,
+                e.id as enrollment_id
             FROM ${SCHEMAS.ENROLLMENT}.${TABLES.ENROLLMENT.ENROLLMENTS} e
             JOIN ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES} c
                 ON e.course_id = c.id
@@ -406,6 +407,18 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
             // courseId를 prefix로 사용
             const coursePrefix = `${course.id}/`;
             console.log('Fetching materials for course:', coursePrefix);  // 디버깅용
+            
+            // 수강 상태가 DROPPED인 경우 자료 접근 막기
+            if (course.enrollment_status === 'DROPPED') {
+                console.log('Course access blocked for DROPPED enrollment:', course.id);
+                return {
+                    ...course,
+                    accessBlocked: true,
+                    blockReason: '수강이 정지된 강의입니다. 관리자에게 문의하세요.',
+                    weeks: []
+                };
+            }
+            
             const weeklyMaterials = await listCourseWeekMaterials(coursePrefix, 'STUDENT');
             
             // 주차별 데이터를 정렬하여 배열로 변환
@@ -438,6 +451,7 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
 
             return {
                 ...course,
+                accessBlocked: false,
                 weeks: weeks
             };
         }));
@@ -476,7 +490,7 @@ router.get('/:courseId/students', verifyToken, async (req, res) => {
         const query = `
             SELECT 
                 u.cognito_user_id,
-                u.name,
+                u.given_name,
                 u.email,
                 e.status as enrollment_status,
                 e.enrolled_at as enrollment_date,
@@ -534,7 +548,7 @@ router.get('/admin/enrollments/all', verifyToken, async (req, res) => {
         const query = `
             SELECT 
                 u.cognito_user_id,
-                u.name as student_name,
+                u.given_name as student_name,
                 u.email as student_email,
                 json_agg(
                     json_build_object(
@@ -559,9 +573,9 @@ router.get('/admin/enrollments/all', verifyToken, async (req, res) => {
             WHERE u.role = 'STUDENT'
             GROUP BY 
                 u.cognito_user_id,
-                u.name,
+                u.given_name,
                 u.email
-            ORDER BY u.name
+            ORDER BY u.given_name
         `;
 
         const result = await pool.query(query);

@@ -1,10 +1,17 @@
 const express = require('express');
 const morgan = require('morgan');
 const dotenv = require('dotenv');
-const dynamodb = require('./src/config/dynamodb');
 
 // Load environment variables
 dotenv.config();
+
+// Alias VITE_ AWS credentials to AWS_ env vars for AWS SDKs
+process.env.AWS_REGION = process.env.AWS_REGION || process.env.VITE_AWS_REGION;
+process.env.AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID || process.env.VITE_AWS_ACCESS_KEY_ID;
+process.env.AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY || process.env.VITE_AWS_SECRET_ACCESS_KEY;
+
+// Initialize AWS SDK modules after env is set
+const dynamodb = require('./src/config/dynamodb');
 
 // Check if AWS credentials are loaded
 console.log('Checking AWS credentials at server start:', {

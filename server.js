@@ -10,9 +10,6 @@ process.env.AWS_REGION = process.env.AWS_REGION || process.env.VITE_AWS_REGION;
 process.env.AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID || process.env.VITE_AWS_ACCESS_KEY_ID;
 process.env.AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY || process.env.VITE_AWS_SECRET_ACCESS_KEY;
 
-// Initialize AWS SDK modules after env is set
-const dynamodb = require('./src/config/dynamodb');
-
 // Check if AWS credentials are loaded
 console.log('Checking AWS credentials at server start:', {
     AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID ? 'Set' : 'Not set',
@@ -65,59 +62,9 @@ app.get('/health', (req, res) => {
     res.json({ status: 'healthy' });
 });
 
-const TABLE_NAME = 'nationslab-courses';
-
-// Base response (no prefix)
-app.get('/', async (req, res) => {
-  try {
-    console.log('=== Root endpoint accessed - fetching public courses ===');
-    
-    const params = {
-      TableName: TABLE_NAME,
-      FilterExpression: '#status = :status',
-      ExpressionAttributeNames: {
-        '#status': 'status'
-      },
-      ExpressionAttributeValues: {
-        ':status': 'published'
-      }
-    };
-
-    console.log('1. DynamoDB Params:', JSON.stringify(params, null, 2));
-    
-    const result = await dynamodb.scan(params);
-    console.log('2. Raw DynamoDB result:', JSON.stringify(result, null, 2));
-    console.log('3. Items from DynamoDB:', JSON.stringify(result.Items, null, 2));
-    console.log('4. Count:', result.Count);
-    console.log('5. ScannedCount:', result.ScannedCount);
-
-    const responseBody = {
-      Items: result.Items || [],
-      Count: result.Count || 0,
-      ScannedCount: result.ScannedCount || 0
-    };
-
-    console.log('6. Response body before stringify:', JSON.stringify(responseBody, null, 2));
-
-    const response = {
-      statusCode: 200,
-      body: JSON.stringify(responseBody)
-    };
-
-    console.log('7. Final response object:', JSON.stringify(response, null, 2));
-    console.log('8. Response body type:', typeof response.body);
-    
-    res.status(response.statusCode).send(response.body);
-    console.log('9. Response sent successfully');
-  } catch (error) {
-    console.error('ERROR in root endpoint:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).send(JSON.stringify({
-      message: 'Internal server error',
-      error: error.message,
-      stack: error.stack
-    }));
-  }
+// Base response - redirect to public courses
+app.get('/', (req, res) => {
+    res.redirect(301, '/api/v1/courses/public');
 });
 
 // Register routes
@@ -136,6 +83,11 @@ app.use(`${API_PREFIX}/admin/enrollments`, require('./src/routes/admin/enrollmen
 app.use(`${API_PREFIX}/timemarks`, timemarksRouter);
 app.use(`${API_PREFIX}/assignments`, assignmentsRouter);
 app.use('/auth', authRoutes);
+
+// 별칭 라우터: /student/grade/{courseId} -> /courses/{courseId}/my-grades
+app.get(`${API_PREFIX}/student/grade/:courseId`, (req, res) => {
+    res.redirect(301, `${API_PREFIX}/courses/${req.params.courseId}/my-grades`);
+});
 
 // Handle 404 errors
 app.use(notFound);

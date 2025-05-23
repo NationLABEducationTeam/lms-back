@@ -102,39 +102,39 @@ masterPool.on('error', (err) => {
 });
 
 // Test connection function with more detailed error logging
-const testConnection = async () => {
-    let client;
-    try {
-        console.log(chalk.blue('🔄 Attempting to connect to database...'));
-        client = await masterPool.connect();
-        console.log(chalk.green('✅ Database connection successful'));
-        const result = await client.query('SELECT current_database() as db_name, current_user as user, version()');
-        console.log(chalk.blue('📊 Database info:'), result.rows[0]);
-        return true;
-    } catch (err) {
-        console.error(chalk.red('❌ Database connection error:'));
-        console.error(chalk.red('Error name:'), err.name);
-        console.error(chalk.red('Error message:'), err.message);
-        console.error(chalk.red('Error stack:'), err.stack);
-        return false;
-    } finally {
-        if (client) {
-            client.release();
-            console.log(chalk.blue('🔄 Database client released'));
-        }
-    }
-};
+// const testConnection = async () => {
+//     let client;
+//     try {
+//         console.log(chalk.blue('🔄 Attempting to connect to database...'));
+//         client = await masterPool.connect();
+//         console.log(chalk.green('✅ Database connection successful'));
+//         const result = await client.query('SELECT current_database() as db_name, current_user as user, version()');
+//         console.log(chalk.blue('📊 Database info:'), result.rows[0]);
+//         return true;
+//     } catch (err) {
+//         console.error(chalk.red('❌ Database connection error:'));
+//         console.error(chalk.red('Error name:'), err.name);
+//         console.error(chalk.red('Error message:'), err.message);
+//         console.error(chalk.red('Error stack:'), err.stack);
+//         return false;
+//     } finally {
+//         if (client) {
+//             client.release();
+//             console.log(chalk.blue('🔄 Database client released'));
+//         }
+//     }
+// };
 
 // Perform initial connection test
-testConnection()
-    .then(success => {
-        if (!success) {
-            console.error(chalk.red('❌ Initial database connection test failed'));
-        }
-    })
-    .catch(err => {
-        console.error(chalk.red('❌ Unexpected error during initial connection test:'), err);
-    });
+// testConnection()
+//     .then(success => {
+//         if (!success) {
+//             console.error(chalk.red('❌ Initial database connection test failed'));
+//         }
+//     })
+//     .catch(err => {
+//         console.error(chalk.red('❌ Unexpected error during initial connection test:'), err);
+//     });
 
 // 풀 상태 모니터링
 const monitorPool = (pool, poolName) => {
@@ -159,7 +159,6 @@ masterPool.on('connect', (client) => {
 module.exports = {
     masterPool,
     getPool,
-    testConnection,
     SCHEMAS,
     TABLES
 }; 

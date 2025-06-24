@@ -563,7 +563,7 @@ router.put('/scores', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (
 
         res.json({
             success: true,
-            message: "점수가 업데이트되었습니다.",
+            message: "점수가 업데이트되었습니다",
             updated_count: updatedStudents.length
         });
     } catch (error) {

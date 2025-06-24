@@ -563,7 +563,7 @@ router.put('/scores', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (
 
         res.json({
             success: true,
-            message: "점수가 업데이트되었습니다",
+            message: "점수가 업데이트되었습니다.",
             updated_count: updatedStudents.length
         });
     } catch (error) {
@@ -571,7 +571,7 @@ router.put('/scores', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (
         console.error('Error updating scores:', error);
         res.status(500).json({
             success: false,
-            message: "점수 업데이트 중 오류가 발 생 했습니다!! ㅠㅠ",
+            message: "점수 업데이트 중 오류가 발 생 했습니다",
             error: error.message
         });
     } finally {

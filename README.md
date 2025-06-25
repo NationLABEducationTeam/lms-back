@@ -74,19 +74,18 @@ Nation's Lab LMS 프로젝트의 백엔드 서버입니다. Express.js 기반으
 - [Node.js](https://nodejs.org/) (v18.x 이상 권장)
 - [Docker](https://www.docker.com/)
 - [AWS CLI](https://aws.amazon.com/cli/)
-- `pnpm` (또는 `npm`, `yarn`)
+- `npm`
 
 ### 설치 및 실행
 
 1.  **레포지토리 클론:**
     ```bash
     git clone https://github.com/NationLABEducationTeam/lms-back.git
-    cd lms-back
     ```
 
 2.  **의존성 설치:**
     ```bash
-    pnpm install
+    npm install
     ```
 
 3.  **.env 파일 설정:**
@@ -146,6 +145,9 @@ ELASTICACHE_PORT=6379
 ## 🚢 배포
 
 배포는 GitHub Actions를 통해 자동으로 이루어집니다. `main` 브랜치에 코드가 푸시되면 워크플로우가 실행되어 ECR에 새 이미지를 빌드 및 푸시하고, ECS 서비스를 업데이트합니다.
+
+**CI/CD 환경 변수:**
+GitHub Actions 워크플로우는 레포지토리 시크릿에 저장된 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` 값을 사용하므로, 배포를 위해 별도의 AWS 자격 증명 설정이 필요하지 않습니다.
 
 ### Amazon ECR
 

@@ -33,6 +33,8 @@ const timemarksRouter = require('./src/routes/timemarks');
 const assignmentsRouter = require('./src/routes/assignments');
 const adminAssignmentsRouter = require('./src/routes/admin/assignments');
 const adminAttendanceRouter = require('./src/routes/admin/attendance');
+const adminReviewsRouter = require('./src/routes/admin/reviews');
+const { swaggerUi, specs } = require('./src/config/swagger');
 
 const app = express();
 
@@ -67,6 +69,9 @@ app.get('/', (req, res) => {
     res.redirect(301, '/api/v1/courses/public');
 });
 
+// Swagger API 문서
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
+
 // Register routes
 app.use(`${API_PREFIX}/courses`, coursesRouter);
 app.use(`${API_PREFIX}/students`, studentsRouter);
@@ -81,6 +86,7 @@ app.use(`${API_PREFIX}/admin/zoom-test`, require('./src/routes/admin/zoom-test')
 app.use(`${API_PREFIX}/admin/attendance`, adminAttendanceRouter);
 app.use(`${API_PREFIX}/admin/enrollments`, require('./src/routes/admin/enrollments'));
 app.use(`${API_PREFIX}/admin/students`, require('./src/routes/admin/students'));
+app.use(`${API_PREFIX}/admin/reviews`, adminReviewsRouter);
 app.use(`${API_PREFIX}/timemarks`, timemarksRouter);
 app.use(`${API_PREFIX}/assignments`, assignmentsRouter);
 app.use('/auth', authRoutes);

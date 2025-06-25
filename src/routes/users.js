@@ -3,6 +3,46 @@ const router = express.Router();
 const { verifyToken, requireRole } = require('../middlewares/auth');
 const { getPool, SCHEMAS, TABLES } = require('../config/database');
 
+/**
+ * @swagger
+ * tags:
+ *   name: Users
+ *   description: User management APIs
+ */
+
+/**
+ * @swagger
+ * /api/v1/users:
+ *   get:
+ *     summary: Retrieve a list of all users
+ *     tags: [Users]
+ *     description: Fetches a complete list of all users. Requires ADMIN role.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       '200':
+ *         description: A list of users.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     users:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/User'
+ *                     total:
+ *                       type: integer
+ *       '401':
+ *         description: Unauthorized, token is missing or invalid.
+ *       '403':
+ *         description: Forbidden, user is not an ADMIN.
+ */
 // Get all users
 router.get('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
@@ -38,6 +78,42 @@ router.get('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/users/{userId}:
+ *   get:
+ *     summary: Retrieve a specific user by ID
+ *     tags: [Users]
+ *     description: Fetches details for a specific user. Users can fetch their own profile. Admins can fetch any user's profile.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         description: The ID of the user to retrieve.
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: User data.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     user:
+ *                       $ref: '#/components/schemas/User'
+ *       '403':
+ *         description: Permission denied.
+ *       '404':
+ *         description: User not found.
+ */
 // Get user by ID
 router.get('/:userId', verifyToken, async (req, res) => {
     try {
@@ -89,6 +165,59 @@ router.get('/:userId', verifyToken, async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/users/{userId}:
+ *   put:
+ *     summary: Update a user's profile
+ *     tags: [Users]
+ *     description: Updates a user's profile information. Users can only update their own profile.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         description: The ID of the user to update.
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       description: User data to update.
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: The user's new full name.
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: The user's new email address.
+ *     responses:
+ *       '200':
+ *         description: User updated successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     user:
+ *                       $ref: '#/components/schemas/User'
+ *       '403':
+ *         description: Permission denied.
+ *       '404':
+ *         description: User not found.
+ */
 // Update user
 router.put('/:userId', verifyToken, async (req, res) => {
     try {

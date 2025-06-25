@@ -7,13 +7,30 @@ const { GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 /**
- * @api {get} /api/v1/admin/assignments/course/:courseId 특정 과목의 모든 과제 목록 조회
- * @apiDescription 관리자/교수가 특정 과목의 모든 과제 목록과 제출 현황을 조회합니다.
- * @apiName GetCourseAssignments
- * @apiGroup AdminAssignments
- * @apiParam {String} courseId 과목 ID
- * @apiSuccess {Boolean} success 성공 여부
- * @apiSuccess {Object[]} data 과제 목록
+ * @swagger
+ * tags:
+ *   - name: Admin: Assignments
+ *     description: Assignment and submission management APIs for administrators
+ */
+
+/**
+ * @swagger
+ * /api/v1/admin/assignments/course/{courseId}:
+ *   get:
+ *     summary: Get all assignments for a course
+ *     tags: [Admin: Assignments]
+ *     description: Retrieves a list of all assignments for a specific course, including submission statistics.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: A list of assignments with statistics.
  */
 router.get('/course/:courseId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     const client = await masterPool.connect();
@@ -75,13 +92,23 @@ router.get('/course/:courseId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']
 });
 
 /**
- * @api {get} /api/v1/admin/assignments/:assignmentId/submissions 특정 과제의 모든 학생 제출 현황 조회
- * @apiDescription 관리자/교수가 특정 과제에 대한 모든 학생의 제출 현황을 조회합니다.
- * @apiName GetAssignmentSubmissions
- * @apiGroup AdminAssignments
- * @apiParam {Number} assignmentId 과제 ID
- * @apiSuccess {Boolean} success 성공 여부
- * @apiSuccess {Object[]} data 학생 제출 현황
+ * @swagger
+ * /api/v1/admin/assignments/{assignmentId}/submissions:
+ *   get:
+ *     summary: Get all student submissions for an assignment
+ *     tags: [Admin: Assignments]
+ *     description: Retrieves submission status for all enrolled students for a specific assignment.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: assignmentId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       '200':
+ *         description: A list of student submissions.
  */
 router.get('/:assignmentId/submissions', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     const client = await masterPool.connect();
@@ -173,13 +200,26 @@ router.get('/:assignmentId/submissions', verifyToken, requireRole(['ADMIN', 'INS
 });
 
 /**
- * @api {get} /api/v1/admin/assignments/submission/:submissionId 특정 학생의 특정 과제 제출물 상세 조회
- * @apiDescription 관리자/교수가 특정 학생이 제출한 과제의 상세 내용을 조회합니다.
- * @apiName GetSubmissionDetail
- * @apiGroup AdminAssignments
- * @apiParam {Number} submissionId 제출물 ID (student_grades의 grade_id)
- * @apiSuccess {Boolean} success 성공 여부
- * @apiSuccess {Object} data 제출물 상세 정보
+ * @swagger
+ * /api/v1/admin/assignments/submission/{submissionId}:
+ *   get:
+ *     summary: Get submission details
+ *     tags: [Admin: Assignments]
+ *     description: Retrieves detailed information for a single submission, including submitted files.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: submissionId
+ *         required: true
+ *         description: The ID of the submission (student_grades.grade_id).
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       '200':
+ *         description: Detailed submission information.
+ *       '404':
+ *         description: Submission not found.
  */
 router.get('/submission/:submissionId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     const client = await masterPool.connect();
@@ -253,13 +293,26 @@ router.get('/submission/:submissionId', verifyToken, requireRole(['ADMIN', 'INST
 });
 
 /**
- * @api {get} /api/v1/admin/assignments/file/:fileKey/download-url 제출된 파일 다운로드 URL 생성
- * @apiDescription 관리자/교수가 학생이 제출한 파일을 다운로드하기 위한 URL을 생성합니다.
- * @apiName GetFileDownloadUrl
- * @apiGroup AdminAssignments
- * @apiParam {String} fileKey 파일 키 (S3 경로)
- * @apiSuccess {Boolean} success 성공 여부
- * @apiSuccess {String} data.downloadUrl 다운로드 URL
+ * @swagger
+ * /api/v1/admin/assignments/file/{fileKey(*)}/download-url:
+ *   get:
+ *     summary: Get a download URL for a submitted file
+ *     tags: [Admin: Assignments]
+ *     description: Generates a presigned URL to download a file submitted by a student.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: fileKey
+ *         required: true
+ *         description: The S3 key of the file.
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: A presigned download URL.
+ *       '404':
+ *         description: File not found.
  */
 router.get('/file/:fileKey(*)/download-url', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     try {
@@ -313,15 +366,38 @@ router.get('/file/:fileKey(*)/download-url', verifyToken, requireRole(['ADMIN', 
 });
 
 /**
- * @api {put} /api/v1/admin/assignments/submission/:submissionId/grade 과제 채점 및 피드백 제공
- * @apiDescription 관리자/교수가 학생이 제출한 과제에 점수를 부여하고 피드백을 남깁니다.
- * @apiName GradeSubmission
- * @apiGroup AdminAssignments
- * @apiParam {Number} submissionId 제출물 ID (student_grades의 grade_id)
- * @apiParam {Number} score 점수
- * @apiParam {String} feedback 피드백
- * @apiSuccess {Boolean} success 성공 여부
- * @apiSuccess {Object} data 업데이트된 성적 정보
+ * @swagger
+ * /api/v1/admin/assignments/submission/{submissionId}/grade:
+ *   put:
+ *     summary: Grade a submission
+ *     tags: [Admin: Assignments]
+ *     description: Sets the score and provides feedback for a student's submission.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: submissionId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               score:
+ *                 type: number
+ *               feedback:
+ *                 type: string
+ *     responses:
+ *       '200':
+ *         description: Submission graded successfully.
+ *       '400':
+ *         description: Invalid score.
+ *       '404':
+ *         description: Submission not found.
  */
 router.put('/submission/:submissionId/grade', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     const client = await masterPool.connect();

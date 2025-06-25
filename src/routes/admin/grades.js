@@ -12,6 +12,82 @@ const {
     exportGradeData
 } = require('../../utils/grade-calculator');
 
+/**
+ * @swagger
+ * tags:
+ *   - name: Admin: Grades
+ *     description: Grade and attendance management APIs for administrators
+ */
+
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     GradeItem:
+ *       type: object
+ *       properties:
+ *         item_id:
+ *           type: integer
+ *         course_id:
+ *           type: string
+ *         item_type:
+ *           type: string
+ *           enum: [ASSIGNMENT, EXAM, ATTENDANCE]
+ *         item_name:
+ *           type: string
+ *         due_date:
+ *           type: string
+ *           format: date
+ *     StudentGrade:
+ *       type: object
+ *       properties:
+ *         grade_id:
+ *           type: integer
+ *         enrollment_id:
+ *           type: string
+ *           format: uuid
+ *         item_id:
+ *           type: integer
+ *         score:
+ *           type: number
+ *           format: float
+ *         is_completed:
+ *           type: boolean
+ */
+
+/**
+ * @swagger
+ * /api/v1/admin/grades/items:
+ *   post:
+ *     summary: Add a grade item (assignment or exam)
+ *     tags: [Admin: Grades]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               courseId:
+ *                 type: string
+ *               type:
+ *                 type: string
+ *                 enum: [ASSIGNMENT, EXAM]
+ *               title:
+ *                 type: string
+ *               due_date:
+ *                 type: string
+ *                 format: date
+ *     responses:
+ *       '200':
+ *         description: Grade item added successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/GradeItem'
+ */
 // 평가 항목 추가 (과제 또는 시험)
 router.post('/items', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     const client = await masterPool.connect();
@@ -335,6 +411,53 @@ router.post('/items/:itemId', verifyToken, async (req, res, next) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/grades/items/{itemId}:
+ *   put:
+ *     summary: Update a grade item
+ *     tags: [Admin: Grades]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: itemId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *               due_date:
+ *                 type: string
+ *                 format: date
+ *               type:
+ *                 type: string
+ *                 enum: [ASSIGNMENT, EXAM]
+ *     responses:
+ *       '200':
+ *         description: Grade item updated successfully.
+ *   delete:
+ *     summary: Delete a grade item
+ *     tags: [Admin: Grades]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: itemId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       '200':
+ *         description: Grade item deleted successfully.
+ */
 // 평가 항목 수정
 router.put('/items/:itemId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     const client = await masterPool.connect();
@@ -481,6 +604,38 @@ router.get('/items/:courseId', verifyToken, async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/grades/scores:
+ *   put:
+ *     summary: Update student scores for a grade item
+ *     tags: [Admin: Grades]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               gradeItemId:
+ *                 type: integer
+ *               scores:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     enrollmentId:
+ *                       type: string
+ *                     score:
+ *                       type: number
+ *               reason:
+ *                 type: string
+ *     responses:
+ *       '200':
+ *         description: Scores updated successfully.
+ */
 // 학생 점수 입력/수정
 router.put('/scores', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     const client = await masterPool.connect();
@@ -699,6 +854,41 @@ router.get('/course/:courseId/student/:studentId', verifyToken, async (req, res)
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/grades/attendance:
+ *   post:
+ *     summary: Record student attendance
+ *     tags: [Admin: Grades]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               studentId:
+ *                 type: string
+ *               courseId:
+ *                 type: string
+ *               sessionType:
+ *                 type: string
+ *                 enum: [LIVE, VOD]
+ *               sessionId:
+ *                 type: string
+ *               durationSeconds:
+ *                 type: integer
+ *               totalDurationSeconds:
+ *                 type: integer
+ *               attendanceDate:
+ *                 type: string
+ *                 format: date
+ *     responses:
+ *       '200':
+ *         description: Attendance recorded successfully.
+ */
 // 수업 참여 기록
 router.post('/attendance', verifyToken, validateAttendance, async (req, res) => {
     const client = await masterPool.connect();
@@ -860,6 +1050,24 @@ router.get('/final/:courseId/:studentId', verifyToken, async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/grades/statistics/{courseId}:
+ *   get:
+ *     summary: Get grade statistics for a course
+ *     tags: [Admin: Grades]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: Grade statistics for the course.
+ */
 // 성적 통계 조회 API 추가
 router.get('/statistics/:courseId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     const client = await masterPool.connect();
@@ -891,6 +1099,24 @@ router.get('/statistics/:courseId', verifyToken, requireRole(['ADMIN', 'INSTRUCT
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/grades/export/{courseId}:
+ *   get:
+ *     summary: Export course grades to Excel
+ *     tags: [Admin: Grades]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: Grade data for export.
+ */
 // 성적 엑셀 내보내기 API 추가
 router.get('/export/:courseId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     const client = await masterPool.connect();

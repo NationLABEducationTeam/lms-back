@@ -7,8 +7,74 @@ const VALID_ROLES = ['STUDENT', 'INSTRUCTOR', 'ADMIN'];
 const VALID_STATUSES = ['ACTIVE', 'COMPLETED', 'DROPPED'];
 
 /**
- * Cognito 회원가입 후 RDS에 사용자 정보를 동기화하는 엔드포인트
- * Cognito Trigger(Post Confirmation)에서 호출됨
+ * @swagger
+ * tags:
+ *   name: Auth
+ *   description: User authentication and synchronization
+ */
+
+/**
+ * @swagger
+ * /auth/sync-user:
+ *   post:
+ *     summary: Sync user data from Cognito
+ *     tags: [Auth]
+ *     description: This endpoint is intended to be called by an AWS Cognito Post Confirmation trigger. It synchronizes the user's data from Cognito to the local application database.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               cognito_user_id:
+ *                 type: string
+ *                 description: The user's sub claim from Cognito.
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               name:
+ *                 type: string
+ *                 description: The user's full name.
+ *               given_name:
+ *                 type: string
+ *                 description: The user's given name.
+ *               role:
+ *                 type: string
+ *                 description: The user's role.
+ *                 enum: [STUDENT, INSTRUCTOR, ADMIN]
+ *                 default: STUDENT
+ *               status:
+ *                 type: string
+ *                 description: The user's status.
+ *                 enum: [ACTIVE, COMPLETED, DROPPED]
+ *                 default: ACTIVE
+ *             required:
+ *               - cognito_user_id
+ *               - email
+ *               - name
+ *     responses:
+ *       '201':
+ *         description: User synchronized successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     user:
+ *                       $ref: '#/components/schemas/User'
+ *       '400':
+ *         description: Bad request, missing required fields or invalid values.
+ *       '409':
+ *         description: Conflict, user with this cognito_user_id already exists.
+ *       '500':
+ *         description: Internal server error.
  */
 router.post('/sync-user', async (req, res) => {
     const client = await masterPool.connect();

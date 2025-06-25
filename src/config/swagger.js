@@ -11,9 +11,13 @@ const options = {
     },
     servers: [
       {
-        url: process.env.API_BASE_URL || 'http://localhost:3000',
+        url: 'http://localhost:3000',
         description: 'Development server',
       },
+      {
+        url: 'http://lms-alb-599601140.ap-northeast-2.elb.amazonaws.com',
+        description: 'Production Server (ALB)'
+      }
     ],
     components: {
       securitySchemes: {
@@ -24,6 +28,64 @@ const options = {
         },
       },
       schemas: {
+        User: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              description: '사용자 고유 ID (UUID)',
+              example: 'a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6'
+            },
+            name: {
+              type: 'string',
+              description: '사용자 이름',
+              example: '홍길동'
+            },
+            email: {
+              type: 'string',
+              format: 'email',
+              description: '이메일 주소',
+              example: 'gildong@example.com'
+            },
+            role: {
+              type: 'string',
+              enum: ['STUDENT', 'INSTRUCTOR', 'ADMIN'],
+              description: '사용자 역할',
+              example: 'STUDENT'
+            }
+          }
+        },
+        Course: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              description: '강좌 고유 ID (UUID)',
+              example: 'a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6'
+            },
+            title: {
+              type: 'string',
+              description: '강좌 제목',
+              example: 'Node.js 마스터하기'
+            },
+            description: {
+              type: 'string',
+              description: '강좌 설명',
+              example: 'Express와 AWS를 활용한 백엔드 개발'
+            },
+            instructor_name: {
+              type: 'string',
+              description: '교수자 이름',
+              example: '김교수'
+            },
+            status: {
+              type: 'string',
+              enum: ['DRAFT', 'PUBLISHED'],
+              description: '강좌 상태',
+              example: 'PUBLISHED'
+            }
+          }
+        },
         ReviewQuestion: {
           type: 'object',
           properties: {

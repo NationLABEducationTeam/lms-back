@@ -13,6 +13,17 @@ const { getStudentGrades } = require('../utils/grade-calculator');
 
 const TABLE_NAME = 'nationslab-courses';
 
+/**
+ * @swagger
+ * tags:
+ *   - name: Courses (Public)
+ *     description: APIs for public access to course information
+ *   - name: Courses (Student)
+ *     description: APIs for students to interact with courses
+ *   - name: Courses (Admin)
+ *     description: APIs for course administration
+ */
+
 // Test database connection (using master)
 router.get('/test-db', async (req, res) => {
     console.log('Attempting to test database connection...');
@@ -35,10 +46,34 @@ router.get('/test-db', async (req, res) => {
     }
 });
 
-
-
-
 // Public routes - Get all published courses
+/**
+ * @swagger
+ * /api/v1/courses/public:
+ *   get:
+ *     summary: Get all published courses
+ *     tags: [Courses (Public)]
+ *     description: Retrieves a list of all courses that are marked as public. No authentication required.
+ *     responses:
+ *       '200':
+ *         description: A list of public courses.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     courses:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/Course'
+ *                     total:
+ *                       type: integer
+ */
 router.get('/public', async (req, res) => {
     try {
         const query = `
@@ -71,8 +106,38 @@ router.get('/public', async (req, res) => {
     }
 });
 
-
-
+/**
+ * @swagger
+ * /api/v1/courses/public/{courseId}:
+ *   get:
+ *     summary: Get a specific public course by ID
+ *     tags: [Courses (Public)]
+ *     description: Retrieves detailed information for a single public course. No authentication required.
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         description: ID of the course to retrieve.
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: Detailed course information.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     course:
+ *                       $ref: '#/components/schemas/Course'
+ *       '404':
+ *         description: Course not found.
+ */
 router.get('/public/:courseId', async (req, res) => {
     try {
         const { courseId } = req.params;
@@ -113,9 +178,6 @@ router.get('/public/:courseId', async (req, res) => {
     }
 });
 
-
-
-
 router.get('/', async (req, res) => {
     try {
         const pool = getPool('read');
@@ -148,10 +210,44 @@ router.get('/', async (req, res) => {
     }
 });
 
-
-
-
 // Get specific course
+/**
+ * @swagger
+ * /api/v1/courses/{courseId}:
+ *   get:
+ *     summary: Get a specific course by ID (Admin)
+ *     tags: [Courses (Admin)]
+ *     description: Retrieves detailed information for a single course. Requires ADMIN role.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: Detailed course information.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     course:
+ *                       $ref: '#/components/schemas/Course'
+ *       '401':
+ *         description: Unauthorized.
+ *       '403':
+ *         description: Forbidden.
+ *       '404':
+ *         description: Course not found.
+ */
 router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
         const { courseId } = req.params;
@@ -192,8 +288,6 @@ router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
         });
     }
 });
-
-
 
 // Student enrollment
 router.post('/:courseId/enroll', verifyToken, requireRole(['STUDENT']), async (req, res) => {
@@ -367,6 +461,27 @@ router.get('/my/progress', verifyToken, requireRole(['STUDENT']), async (req, re
 // });
 
 // Get enrolled courses for a student
+/**
+ * @swagger
+ * /api/v1/courses/enrolled/{studentId}:
+ *   get:
+ *     summary: Get courses enrolled by a student
+ *     tags: [Courses (Student)]
+ *     description: Retrieves a list of courses a specific student is enrolled in, including weekly materials.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: studentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: A list of enrolled courses with materials.
+ *       '403':
+ *         description: Permission denied.
+ */
 router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
     try {
         const { studentId } = req.params;
@@ -474,6 +589,27 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
 });
 
 // Get enrolled students for a specific course (Admin only)
+/**
+ * @swagger
+ * /api/v1/courses/{courseId}/students:
+ *   get:
+ *     summary: Get enrolled students for a course (Admin)
+ *     tags: [Courses (Admin)]
+ *     description: Retrieves a list of all students enrolled in a specific course. Requires ADMIN role.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: A list of enrolled students.
+ *       '403':
+ *         description: Permission denied.
+ */
 router.get('/:courseId/students', verifyToken, async (req, res) => {
     try {
         const { courseId } = req.params;
@@ -625,8 +761,25 @@ function getFileType(fileName) {
 }
 
 /**
- * 학생 성적 조회 API (최적화 버전)
- * @route GET /:courseId/my-grades
+ * @swagger
+ * /api/v1/courses/{courseId}/my-grades:
+ *   get:
+ *     summary: Get my grades for a specific course
+ *     tags: [Courses (Student)]
+ *     description: Retrieves the current student's grades for a specific course, including attendance, assignments, and exams.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: Detailed grade information for the course.
+ *       '404':
+ *         description: Course information not found.
  */
 router.get('/:courseId/my-grades', verifyToken, async (req, res) => {
     const client = await masterPool.connect();

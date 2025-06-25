@@ -3,6 +3,69 @@ const router = express.Router();
 const { verifyToken, requireRole } = require('../middlewares/auth');
 const { getPool, SCHEMAS, TABLES } = require('../config/database');
 
+/**
+ * @swagger
+ * tags:
+ *   name: Enrollments
+ *   description: Course enrollment management
+ */
+
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     Enrollment:
+ *       type: object
+ *       properties:
+ *         id:
+ *           type: string
+ *           format: uuid
+ *         course_id:
+ *           type: string
+ *           format: uuid
+ *         student_id:
+ *           type: string
+ *           format: uuid
+ *         enrolled_at:
+ *           type: string
+ *           format: date-time
+ *         status:
+ *           type: string
+ *           enum: [ACTIVE, DROPPED, COMPLETED]
+ */
+
+/**
+ * @swagger
+ * /api/v1/enrollments:
+ *   post:
+ *     summary: Create a new enrollment
+ *     tags: [Enrollments]
+ *     description: Enrolls a student in a course. Creates related progress tracking and grade records.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [courseId, userId]
+ *             properties:
+ *               courseId:
+ *                 type: string
+ *                 format: uuid
+ *               userId:
+ *                 type: string
+ *                 format: uuid
+ *               enrolledAt:
+ *                 type: string
+ *                 format: date-time
+ *     responses:
+ *       '201':
+ *         description: Enrollment created successfully.
+ *       '400':
+ *         description: User already enrolled.
+ */
 // Create enrollment
 router.post('/', verifyToken, async (req, res) => {
     const pool = getPool('write');
@@ -119,6 +182,35 @@ router.post('/', verifyToken, async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/enrollments/course/{courseId}:
+ *   get:
+ *     summary: Get all enrollments for a course
+ *     tags: [Enrollments]
+ *     description: Retrieves a list of all students enrolled in a specific course. Requires ADMIN or INSTRUCTOR role.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       '200':
+ *         description: A list of enrollments for the course.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 enrollments:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Enrollment'
+ */
 // Get enrollments for a course
 router.get('/course/:courseId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     try {
@@ -161,6 +253,26 @@ router.get('/course/:courseId', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/enrollments/student/{studentId}:
+ *   get:
+ *     summary: Get all enrollments for a student
+ *     tags: [Enrollments]
+ *     description: Retrieves a list of all courses a student is enrolled in.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: studentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       '200':
+ *         description: A list of the student's enrollments.
+ */
 // Get enrollments for a student
 router.get('/student/:studentId', verifyToken, async (req, res) => {
     try {
@@ -211,6 +323,38 @@ router.get('/student/:studentId', verifyToken, async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/enrollments/{enrollmentId}:
+ *   put:
+ *     summary: Update enrollment status
+ *     tags: [Enrollments]
+ *     description: Updates the status of a specific enrollment (e.g., ACTIVE, DROPPED). Requires ADMIN role.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: enrollmentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [ACTIVE, DROPPED, COMPLETED]
+ *     responses:
+ *       '200':
+ *         description: Enrollment status updated successfully.
+ *       '404':
+ *         description: Enrollment not found.
+ */
 // Update enrollment status
 router.put('/:enrollmentId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     const pool = getPool('write');
@@ -309,6 +453,35 @@ async function calculateProgress(enrollmentId) {
     }
 }
 
+/**
+ * @swagger
+ * /api/v1/enrollments/complete-week:
+ *   post:
+ *     summary: Mark a course week as completed
+ *     tags: [Enrollments]
+ *     description: Marks a specific week's attendance as completed for an enrollment.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               enrollmentId:
+ *                 type: string
+ *                 format: uuid
+ *               weekNumber:
+ *                 type: integer
+ *     responses:
+ *       '200':
+ *         description: Week marked as completed.
+ *       '400':
+ *         description: Missing required parameters.
+ *       '404':
+ *         description: Attendance item for the week not found.
+ */
 // 특정 주차 강의 수강 완료 처리
 router.post('/complete-week', verifyToken, async (req, res) => {
     const pool = getPool('write');
@@ -376,6 +549,28 @@ router.post('/complete-week', verifyToken, async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/enrollments/progress/{enrollmentId}:
+ *   get:
+ *     summary: Get enrollment progress
+ *     tags: [Enrollments]
+ *     description: Calculates and retrieves the progress percentage for a specific enrollment.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: enrollmentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       '200':
+ *         description: Progress data.
+ *       '404':
+ *         description: Enrollment not found.
+ */
 // 진도율 조회
 router.get('/progress/:enrollmentId', verifyToken, async (req, res) => {
     try {

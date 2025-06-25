@@ -34,3 +34,7 @@ logs/
 
 # Test coverage
 coverage/ 
+
+#test를 위해 만들어진 파일들을 담아둔 폴더는 push에서 제외
+testfolder/
+testfolder/*

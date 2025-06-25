@@ -20,6 +20,34 @@ const { v4: uuidv4 } = require('uuid');
 const { createZoomMeeting } = require('./zoom');
 const crypto = require('crypto');
 
+/**
+ * @swagger
+ * tags:
+ *   - name: Admin: Courses
+ *     description: Course management APIs for administrators
+ */
+
+/**
+ * @swagger
+ * /api/v1/admin/courses/{courseId}:
+ *   get:
+ *     summary: Get a specific course with materials
+ *     tags: [Admin: Courses]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         description: The ID of the course to retrieve.
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: Detailed course information including weekly materials.
+ *       '404':
+ *         description: Course not found.
+ */
 // Admin: Get specific course with materials
 router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     const client = await masterPool.connect();
@@ -110,6 +138,27 @@ router.get('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/courses:
+ *   get:
+ *     summary: Get all courses
+ *     tags: [Admin: Courses]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       '200':
+ *         description: A list of all courses.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 courses:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Course'
+ */
 // Admin: Get all courses
 router.get('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
@@ -143,6 +192,26 @@ router.get('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/courses/{courseId}:
+ *   delete:
+ *     summary: Delete a course
+ *     tags: [Admin: Courses]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: Course and related records deleted successfully.
+ *       '404':
+ *         description: Course not found.
+ */
 // Admin: Delete course
 router.delete('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     const client = await masterPool.connect();
@@ -205,6 +274,32 @@ router.delete('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/courses/{courseId}:
+ *   put:
+ *     summary: Update a course
+ *     tags: [Admin: Courses]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       description: Course data to update.
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Course'
+ *     responses:
+ *       '200':
+ *         description: Course updated successfully.
+ *       '404':
+ *         description: Course not found.
+ */
 // Admin: Update course
 router.put('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     const client = await masterPool.connect();
@@ -351,6 +446,35 @@ router.put('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) =
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/courses/{courseId}:
+ *   post:
+ *     summary: Create a week folder for a course
+ *     tags: [Admin: Courses]
+ *     description: Creates a new week folder (e.g., '1주차/') in S3 for the specified course.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               weekNumber:
+ *                 type: integer
+ *                 example: 1
+ *     responses:
+ *       '200':
+ *         description: Week folder created successfully.
+ */
 // Admin: Create week folder
 router.post('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
@@ -404,6 +528,41 @@ router.post('/:courseId', verifyToken, requireRole(['ADMIN']), async (req, res) 
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/courses/{courseId}/{weekNumber}/upload:
+ *   post:
+ *     summary: Generate presigned URLs for file upload
+ *     tags: [Admin: Courses]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *       - in: path
+ *         name: weekNumber
+ *         required: true
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               files:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     name:
+ *                       type: string
+ *                     type:
+ *                       type: string
+ *     responses:
+ *       '200':
+ *         description: Upload URLs generated successfully.
+ */
 // Admin: Generate presigned URLs for file upload
 router.post('/:courseId/:weekNumber/upload', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
@@ -460,6 +619,25 @@ router.post('/:courseId/:weekNumber/upload', verifyToken, requireRole(['ADMIN'])
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/courses/{courseId}/toggle-status:
+ *   put:
+ *     summary: Toggle course status
+ *     tags: [Admin: Courses]
+ *     description: Toggles the status of a course between PUBLISHED and DRAFT.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       '200':
+ *         description: Course status toggled successfully.
+ */
 // Admin: Toggle course status (PUBLISHED <-> DRAFT)
 router.put('/:courseId/toggle-status', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     const client = await masterPool.connect();
@@ -516,6 +694,24 @@ router.put('/:courseId/toggle-status', verifyToken, requireRole(['ADMIN']), asyn
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/courses:
+ *   post:
+ *     summary: Create a new course
+ *     tags: [Admin: Courses]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Course'
+ *     responses:
+ *       '201':
+ *         description: Course created successfully.
+ */
 // Admin: Create course
 router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     const client = await masterPool.connect();
@@ -810,6 +1006,37 @@ router.post('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/courses/{courseId}/materials/{weekNumber}/{fileName}/permission:
+ *   put:
+ *     summary: Update file download permission
+ *     tags: [Admin: Courses]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: courseId
+ *         required: true
+ *       - in: path
+ *         name: weekNumber
+ *         required: true
+ *       - in: path
+ *         name: fileName
+ *         required: true
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               isDownloadable:
+ *                 type: boolean
+ *     responses:
+ *       '200':
+ *         description: File permission updated successfully.
+ */
 // Update file download permission (Admin only)
 router.put('/:courseId/materials/:weekNumber/:fileName/permission', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
@@ -947,6 +1174,29 @@ router.put('/:courseId/materials/:weekNumber/:fileName/permission', verifyToken,
     }
 });
 
+/**
+ * @swagger
+ * /api/v1/admin/courses/create-zoom-session:
+ *   post:
+ *     summary: Create a Zoom session for a course
+ *     tags: [Admin: Courses]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               sessionName:
+ *                 type: string
+ *               courseId:
+ *                 type: string
+ *     responses:
+ *       '200':
+ *         description: Zoom session created successfully.
+ */
 // Admin: 사용자 친화적인 Zoom 세션 생성 API
 router.post('/create-zoom-session', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
@@ -1279,7 +1529,7 @@ router.post('/create-zoom-session', verifyToken, requireRole(['ADMIN']), async (
         const client = await masterPool.connect();
         try {
             await client.query('BEGIN');
-            
+
             // 강의 존재 여부 확인
             const courseResult = await client.query(`
                 SELECT id FROM ${SCHEMAS.COURSE}.${TABLES.COURSE.COURSES}
@@ -1301,7 +1551,7 @@ router.post('/create-zoom-session', verifyToken, requireRole(['ADMIN']), async (
         } catch (error) {
             await client.query('ROLLBACK');
             console.error('강의 Zoom 링크 업데이트 오류:', error);
-            
+
             // 강의 업데이트 실패해도 Zoom 미팅 생성은 성공한 것으로 처리
             return res.json({
                 success: true,
@@ -1325,7 +1575,7 @@ router.post('/create-zoom-session', verifyToken, requireRole(['ADMIN']), async (
         res.json({
             success: true,
             message: "Zoom 세션이 성공적으로 생성되었습니다.",
-            data: {
+                data: {
                 meeting: {
                     id: meetingResult.meeting_id,
                     join_url: meetingResult.join_url,
@@ -1341,7 +1591,7 @@ router.post('/create-zoom-session', verifyToken, requireRole(['ADMIN']), async (
                     time: `${startDateTime.getHours().toString().padStart(2, '0')}:${startDateTime.getMinutes().toString().padStart(2, '0')}`,
                     duration: sessionDuration
                 }
-            }
+                }
         });
     } catch (error) {
         console.error('Zoom 세션 생성 오류:', error);
@@ -1353,4 +1603,4 @@ router.post('/create-zoom-session', verifyToken, requireRole(['ADMIN']), async (
     }
 });
 
-module.exports = router; 
+module.exports = router;

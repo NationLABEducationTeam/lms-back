@@ -46,16 +46,44 @@ router.get('/templates', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), asyn
             ORDER BY created_at DESC
         `);
 
-        // 각 템플릿에 빈 questions 배열과 description 추가 (S3 연동 전 임시)
-        const templatesWithQuestions = result.rows.map(template => ({
-            ...template,
-            description: template.title, // 임시로 title 사용
-            questions: [] // S3 연동 전까지 빈 배열
+        // S3에서 설문 내용(description, questions) 가져오기
+        const templatesWithDetails = await Promise.all(result.rows.map(async (template) => {
+            if (template.s3_key) {
+                try {
+                    const s3Bucket = 'nationslablmscoursebucket';
+                    const s3Params = {
+                        Bucket: s3Bucket,
+                        Key: template.s3_key,
+                    };
+                    const s3Object = await s3Client.send(new GetObjectCommand(s3Params));
+                    const s3Content = await s3Object.Body.transformToString('utf-8');
+                    const { description, questions } = JSON.parse(s3Content);
+
+                    return {
+                        ...template,
+                        description: description || template.title,
+                        questions: questions || []
+                    };
+                } catch (s3Error) {
+                    console.error(`Error fetching template from S3 (key: ${template.s3_key}):`, s3Error);
+                    // S3에서 에러 발생 시 기본값으로 반환
+                    return {
+                        ...template,
+                        description: template.title,
+                        questions: []
+                    };
+                }
+            }
+            return {
+                ...template,
+                description: template.title,
+                questions: []
+            };
         }));
 
         res.json({
             success: true,
-            data: templatesWithQuestions
+            data: templatesWithDetails
         });
     } catch (error) {
         console.error('Error fetching review templates:', error);
@@ -160,16 +188,28 @@ router.post('/templates', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), asy
         const templateId = uuidv4();
         const now = new Date().toISOString();
 
+        const s3Key = `reviews/${courseId}/${templateId}.json`;
+        const s3Bucket = 'nationslablmscoursebucket';
+
+        // S3에 질문 데이터 업로드
+        const s3Params = {
+            Bucket: s3Bucket,
+            Key: s3Key,
+            Body: JSON.stringify({ description, questions: processedQuestions }),
+            ContentType: 'application/json'
+        };
+        await s3Client.send(new PutObjectCommand(s3Params));
+
         const result = await client.query(`
             INSERT INTO review_templates (id, title, course_id, target_respondents, s3_key, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, title, course_id as "courseId", target_respondents as "targetRespondents", s3_key, created_at as "createdAt", updated_at as "updatedAt"
-        `, [templateId, title, courseId, targetRespondents || null, null, now, now]);
+        `, [templateId, title, courseId, targetRespondents || null, s3Key, now, now]);
 
         // 응답에 description과 questions 추가
         const responseData = {
             ...result.rows[0],
-            description: description || result.rows[0].title, // description이 없으면 title 사용
+            description: description || result.rows[0].title,
             questions: processedQuestions
         };
 
@@ -198,7 +238,7 @@ router.post('/templates', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), asy
  * @apiSuccess {Boolean} success 성공 여부
  * @apiSuccess {Object} data 템플릿 상세 정보
  */
-router.get('/templates/:id', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
+router.get('/templates/:id', async (req, res) => {
     const client = await masterPool.connect();
     try {
         const { id } = req.params;
@@ -223,16 +263,36 @@ router.get('/templates/:id', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), 
             });
         }
 
-        // description과 questions 추가 (S3 연동 전 임시)
-        const templateWithQuestions = {
-            ...result.rows[0],
-            description: result.rows[0].title, // 임시로 title 사용
-            questions: [] // S3 연동 전까지 빈 배열
+        const template = result.rows[0];
+        let description = template.title;
+        let questions = [];
+
+        if (template.s3_key) {
+            try {
+                const s3Bucket = 'nationslablmscoursebucket';
+                const s3Params = {
+                    Bucket: s3Bucket,
+                    Key: template.s3_key,
+                };
+                const s3Object = await s3Client.send(new GetObjectCommand(s3Params));
+                const s3Content = await s3Object.Body.transformToString('utf-8');
+                const s3Data = JSON.parse(s3Content);
+                description = s3Data.description || template.title;
+                questions = s3Data.questions || [];
+            } catch (s3Error) {
+                console.error(`Error fetching template details from S3 (key: ${template.s3_key}):`, s3Error);
+            }
+        }
+        
+        const templateWithDetails = {
+            ...template,
+            description,
+            questions
         };
 
         res.json({
             success: true,
-            data: templateWithQuestions
+            data: templateWithDetails
         });
     } catch (error) {
         console.error('Error fetching review template:', error);
@@ -265,13 +325,14 @@ router.put('/templates/:id', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), 
         const { title, description, courseId, targetRespondents, questions } = req.body;
 
         // 템플릿 존재 확인
-        const existingTemplate = await client.query('SELECT id FROM review_templates WHERE id = $1', [id]);
-        if (existingTemplate.rows.length === 0) {
+        const existingTemplateResult = await client.query('SELECT id, s3_key FROM review_templates WHERE id = $1', [id]);
+        if (existingTemplateResult.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "설문 템플릿을 찾을 수 없습니다."
             });
         }
+        const existingTemplate = existingTemplateResult.rows[0];
 
         // 입력 검증
         if (!title || !courseId || !questions || !Array.isArray(questions) || questions.length === 0) {
@@ -312,12 +373,23 @@ router.put('/templates/:id', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), 
 
         const now = new Date().toISOString();
 
+        // S3에 업데이트된 질문 데이터 업로드
+        const s3Key = existingTemplate.s3_key || `reviews/${courseId}/${id}.json`;
+        const s3Bucket = 'nationslablmscoursebucket';
+        const s3Params = {
+            Bucket: s3Bucket,
+            Key: s3Key,
+            Body: JSON.stringify({ description, questions: processedQuestions }),
+            ContentType: 'application/json'
+        };
+        await s3Client.send(new PutObjectCommand(s3Params));
+
         const result = await client.query(`
             UPDATE review_templates 
-            SET title = $1, course_id = $2, target_respondents = $3, updated_at = $4
-            WHERE id = $5
+            SET title = $1, course_id = $2, target_respondents = $3, updated_at = $4, s3_key = $5
+            WHERE id = $6
             RETURNING id, title, course_id as "courseId", target_respondents as "targetRespondents", s3_key, created_at as "createdAt", updated_at as "updatedAt"
-        `, [title, courseId, targetRespondents || null, now, id]);
+        `, [title, courseId, targetRespondents || null, now, s3Key, id]);
 
         // 응답에 description과 questions 추가
         const responseData = {
@@ -398,17 +470,27 @@ router.delete('/templates/:id', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']
  * @apiSuccess {Boolean} success 성공 여부
  * @apiSuccess {Object} data 제출된 응답
  */
-router.post('/responses', verifyToken, async (req, res) => {
+// POST /api/admin/reviews/responses - 설문 응답 제출 (수정된 코드)
+// verifyToken 미들웨어 제거
+router.post('/responses', async (req, res) => {
     const client = await masterPool.connect();
     try {
-        const { reviewTemplateId, answers } = req.body;
-        const userId = req.user.sub; // JWT에서 사용자 ID 추출
+        // userId 대신 userName을 body에서 받음
+        const { reviewTemplateId, answers, userName } = req.body;
 
         // 입력 검증
         if (!reviewTemplateId || !answers || !Array.isArray(answers) || answers.length === 0) {
             return res.status(400).json({
                 success: false,
                 message: "템플릿 ID와 답변은 필수입니다."
+            });
+        }
+        
+        // 이름 입력 검증 (선택적)
+        if (!userName || userName.trim() === '') {
+             return res.status(400).json({
+                success: false,
+                message: "이름을 입력해주세요."
             });
         }
 
@@ -421,27 +503,11 @@ router.post('/responses', verifyToken, async (req, res) => {
             });
         }
 
-        // 중복 응답 확인
-        const existingResponse = await client.query(
-            'SELECT id FROM review_responses WHERE review_template_id = $1 AND user_id = $2',
-            [reviewTemplateId, userId]
-        );
-        if (existingResponse.rows.length > 0) {
-            return res.status(400).json({
-                success: false,
-                message: "이미 응답을 제출하셨습니다."
-            });
-        }
+        // userId 기반 중복 응답 확인 로직 제거
 
-        // 기본 답변 검증 (질문 ID 검증은 추후 S3에서 로드할 때 구현)
+        // 기본 답변 검증
         for (const answer of answers) {
-            if (!answer.questionId) {
-                return res.status(400).json({
-                    success: false,
-                    message: "질문 ID가 필요합니다."
-                });
-            }
-            if (answer.answer === undefined || answer.answer === null) {
+            if (!answer.questionId || answer.answer === undefined || answer.answer === null) {
                 return res.status(400).json({
                     success: false,
                     message: "모든 질문에 답변해주세요."
@@ -454,12 +520,12 @@ router.post('/responses', verifyToken, async (req, res) => {
 
         await client.query('BEGIN');
 
-        // 응답 생성
+        // 응답 생성: user_id 대신 user_name을 저장하고, user_id는 NULL로 설정
         const responseResult = await client.query(`
-            INSERT INTO review_responses (id, review_template_id, user_id, submitted_at)
+            INSERT INTO review_responses (id, review_template_id, user_name, submitted_at)
             VALUES ($1, $2, $3, $4)
-            RETURNING id, review_template_id as "reviewTemplateId", submitted_at as "submittedAt"
-        `, [responseId, reviewTemplateId, userId, now]);
+            RETURNING id, review_template_id as "reviewTemplateId", user_name as "userName", submitted_at as "submittedAt"
+        `, [responseId, reviewTemplateId, userName, now]);
 
         // 답변 생성
         for (const answer of answers) {
@@ -523,7 +589,7 @@ router.get('/responses/:reviewTemplateId', verifyToken, requireRole(['ADMIN', 'I
                 rr.id,
                 rr.review_template_id as "reviewTemplateId",
                 rr.submitted_at as "submittedAt",
-                rr.user_id,
+                rr.user_name as "userName",
                 json_agg(
                     json_build_object(
                         'questionId', ra.question_id,
@@ -533,7 +599,7 @@ router.get('/responses/:reviewTemplateId', verifyToken, requireRole(['ADMIN', 'I
             FROM review_responses rr
             LEFT JOIN review_answers ra ON rr.id = ra.response_id
             WHERE rr.review_template_id = $1
-            GROUP BY rr.id, rr.review_template_id, rr.submitted_at, rr.user_id
+            GROUP BY rr.id, rr.review_template_id, rr.submitted_at, rr.user_name
             ORDER BY rr.submitted_at DESC
         `, [reviewTemplateId]);
 

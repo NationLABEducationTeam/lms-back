@@ -21,6 +21,7 @@ Nation's Lab LMS 프로젝트의 백엔드 서버입니다. Express.js를 기반
 5.  [**환경 변수**](#-환경-변수)
 6.  [**API 문서 (Swagger)**](#-api-문서-swagger)
 7.  [**배포 (CI/CD)**](#-배포-cicd)
+    - [개발자 워크플로우 가이드](#-개발자-워크플로우-가이드)
     - [배포 파이프라인](#배포-파이프라인)
     - [AWS 인프라 구성](#aws-인프라-구성)
 
@@ -146,17 +147,25 @@ ELASTICACHE_PORT=6379
 
 ## 🚢 배포 (CI/CD)
 
-배포는 **GitHub Actions**를 통해 `main` 브랜치에 코드가 푸시될 때 자동으로 진행됩니다.
+### 개발자 워크플로우 가이드
+
+> **✅ 핵심: Git 브랜치에 Push하면 배포는 자동입니다.**
+>
+> 이 프로젝트는 GitHub Flow를 기반으로 한 완전 자동화된 CI/CD 파이프라인이 구축되어 있습니다. 개발자는 배포 과정 자체에 개입할 필요 없이, Git 브랜치 전략에 따라 작업하기만 하면 됩니다. **배포를 위해 GitHub Actions 워크플로우(`.github/workflows/*.yml`)를 수정하거나, AWS 자격 증명을 별도로 설정할 필요가 없습니다.**
+>
+> 1.  **브랜치 생성**: 새로운 기능 개발이나 버그 수정 시, `main` 브랜치에서 새로운 브랜치를 생성합니다. (예: `feature/new-api`, `fix/login-bug`)
+> 2.  **개발 및 Push**: 코드를 수정한 후, 자신의 브랜치에 커밋하고 Push합니다.
+> 3.  **테스트 서버 배포 (선택 사항)**: 특정 브랜치(예: `develop` 또는 `feature/*`)에 Push하면, 코드가 자동으로 **테스트 서버**에 배포될 수 있습니다. 이를 통해 `main` 브랜치에 병합하기 전에 변경사항을 안전하게 검증할 수 있습니다.
+> 4.  **Pull Request**: 개발이 완료되면 `main` 브랜치로 Pull Request(PR)를 생성합니다.
+> 5.  **프로덕션 배포**: PR이 승인되고 `main` 브랜치에 병합(Merge)되면, 변경사항은 자동으로 **프로덕션 서버**에 배포됩니다.
 
 ### 배포 파이프라인
 
-1.  **Trigger**: `main` 브랜치에 Push 또는 Pull Request Merge 발생
+1.  **Trigger**: `main` 또는 `develop` 등의 주요 브랜치에 Push 또는 Pull Request Merge 발생
 2.  **Build**: 소스코드를 기반으로 Docker 이미지를 빌드합니다.
 3.  **Push to ECR**: 빌드된 이미지를 AWS ECR(Elastic Container Registry)에 푸시합니다.
 4.  **Update ECS Task Definition**: ECR에 푸시된 새 이미지 정보를 담아 ECS 작업 정의(Task Definition)의 새 버전을 생성합니다.
-5.  **Deploy to ECS**: 업데이트된 작업 정의를 사용하여 ECS 서비스(Service)를 롤링 업데이트 방식으로 배포합니다. 이 과정에서 무중단 배포가 이루어집니다.
-
-> **GitHub Actions Secrets**: 배포에 필요한 AWS 자격 증명(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)은 GitHub 레포지토리의 Secrets에 안전하게 저장되어 사용됩니다.
+5.  **Deploy to ECS**: 업데이트된 작업 정의를 사용하여 해당 환경(테스트/프로덕션)의 ECS 서비스(Service)를 롤링 업데이트 방식으로 배포합니다. 이 과정에서 무중단 배포가 이루어집니다.
 
 ### AWS 인프라 구성
 
@@ -186,7 +195,7 @@ ECS는 컨테이너 오케스트레이션 서비스로, 애플리케이션의 �
 
 지정된 수의 작업(컨테이너) 인스턴스를 클러스터에서 항상 실행하고 유지 관리합니다.
 
--   **서비스 이름**: `lms-service`
+-   **서비스 이름**: `lms-service` (환경별로 접미사가 붙을 수 있음. 예: `lms-service-prod`, `lms-service-dev`)
 -   **원하는 작업 수 (Desired Tasks)**: 2 (가용성을 위해 2개 이상 유지)
 -   **배포 전략**: 롤링 업데이트 (무중단 배포)
 

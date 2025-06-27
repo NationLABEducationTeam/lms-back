@@ -3,9 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 
 // AWS 설정
 AWS.config.update({
-    region: process.env.AWS_REGION || 'ap-northeast-2',
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+    region: process.env.AWS_REGION || 'ap-northeast-2'
 });
 
 const dynamodb = new AWS.DynamoDB.DocumentClient();

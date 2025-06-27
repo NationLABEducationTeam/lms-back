@@ -1,45 +1,82 @@
 # Nation's Lab LMS - Backend
 
-[![Node.js CI](https://github.com/NationLABEducationTeam/lms-back/actions/workflows/deploy.yml/badge.svg)](https://github.com/NationLABEducationTeam/lms-back/actions/workflows/deploy.yml)
+[![Deploy to Amazon ECS](https://github.com/NationLABEducationTeam/lms-back/actions/workflows/deploy.yml/badge.svg)](https://github.com/NationLABEducationTeam/lms-back/actions/workflows/deploy.yml)
 [![Express.js](https://img.shields.io/badge/Express.js-4.x-orange.svg)](https://expressjs.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14-blue.svg)](https://www.postgresql.org/)
 [![Docker](https://img.shields.io/badge/Docker-20.10-blue.svg?logo=docker)](https://www.docker.com/)
-[![AWS ECS](https://img.shields.io/badge/AWS-ECS-orange.svg?logo=amazon-aws)](https://aws.amazon.com/ecs/)
+[![AWS Fargate](https://img.shields.io/badge/AWS-Fargate-orange.svg?logo=amazon-aws)](https://aws.amazon.com/fargate/)
 
 Nation's Lab LMS 프로젝트의 백엔드 서버입니다. Express.js를 기반으로 구축되었으며, AWS의 강력한 클라우드 서비스를 활용하여 안정적이고 확장 가능한 학습 관리 시스템의 핵심 기능을 제공합니다.
 
 ---
 
+## 🏗️ 시스템 아키텍처
+
+본 프로젝트는 GitHub Actions를 통한 CI/CD 파이프라인과 AWS의 관리형 서비스를 기반으로 한 서버리스 아키텍처로 구성되어 있습니다. 개발자가 `main` 브랜치에 코드를 Push하면, 모든 배포 과정은 자동으로 진행됩니다.
+
+```mermaid
+graph TD
+    subgraph "GitHub"
+        A["Code Repository<br/>(main branch)"] -->|1. Push/Merge| B{"GitHub Actions<br/>(CI/CD)"}
+    end
+
+    subgraph "AWS"
+        B -->|2. Build & Push Image| C["ECR<br/>(Container Registry)"]
+        B -->|3. Update Task Definition| D["ECS<br/>(Elastic Container Service)"]
+        D -- "4. Pull Image" --> C
+        D -- "5. Run Task" --> E(("Fargate<br/>Serverless Compute"))
+        
+        subgraph "Application"
+            E -- "Node.js App" --> F{"Application<br/>Load Balancer"}
+            F --> G["API<br/>(Express.js)"]
+            G --> H["RDS<br/>(PostgreSQL)"]
+            G --> I["S3<br/>(Static Assets)"]
+            G --> J["DynamoDB<br/>(NoSQL)"]
+            G --> K["ElastiCache<br/>(Redis)"]
+            G --> L["Cognito<br/>(Auth)"]
+        end
+    end
+
+    subgraph "User"
+        U["Developer"] --> A
+        V["End User"] --> F
+    end
+
+    style B fill:#2b9e49,stroke:#333,stroke-width:2px,color:#fff
+    style C fill:#f9912e,stroke:#333,stroke-width:2px,color:#fff
+    style D fill:#f9912e,stroke:#333,stroke-width:2px,color:#fff
+    style E fill:#f9912e,stroke:#333,stroke-width:2px,color:#fff
+    style F fill:#f9912e,stroke:#333,stroke-width:2px,color:#fff
+    style G fill:#2e73b8,stroke:#333,stroke-width:2px,color:#fff
+    style H fill:#2e73b8,stroke:#333,stroke-width:2px,color:#fff
+    style I fill:#2e73b8,stroke:#333,stroke-width:2px,color:#fff
+    style J fill:#2e73b8,stroke:#333,stroke-width:2px,color:#fff
+    style K fill:#2e73b8,stroke:#333,stroke-width:2px,color:#fff
+    style L fill:#2e73b8,stroke:#333,stroke-width:2px,color:#fff
+```
+
+---
+
 ## 📚 목차
 
-1.  [**주요 기능**](#-주요-기능)
-2.  [**기술 스택**](#-기술-스택)
-3.  [**시스템 아키텍처**](#-시스템-아키텍처)
-4.  [**시작하기**](#-시작하기)
+1.  [**기술 스택**](#-기술-스택)
+2.  [**코드 레벨 설명**](#-코드-레벨-설명)
+    - [프로젝트 구조](#프로젝트-구조)
+    - [데이터베이스 스키마](#데이터베이스-스키마)
+3.  [**로컬에서 시작하기**](#-로컬에서-시작하기)
     - [사전 준비](#사전-준비)
     - [설치 및 실행](#설치-및-실행)
-5.  [**환경 변수**](#-환경-변수)
-6.  [**API 문서 (Swagger)**](#-api-문서-swagger)
-7.  [**배포 (CI/CD)**](#-배포-cicd)
-    - [개발자 워크플로우 가이드](#-개발자-워크플로우-가이드)
-    - [배포 파이프라인](#배포-파이프라인)
-    - [AWS 인프라 구성](#aws-인프라-구성)
+4.  [**인프라 레벨 설명 (배포)**](#-인프라-레벨-설명-배포)
+    - [핵심 원칙: Git Push = Deploy](#핵심-원칙-git-push--deploy)
+    - [CI/CD 파이프라인 상세](#cicd-파이프라인-상세)
+    - [주요 AWS 서비스 역할](#주요-aws-서비스-역할)
+    - [IAM 역할의 이해: `Task Role` vs `Execution Role`](#iam-역할의-이해-task-role-vs-execution-role)
+5.  [**API 문서 (Swagger)**](#-api-문서-swagger)
+6.  [**환경 변수**](#-환경-변수)
 
 ---
 
-## ✨ 주요 기능
-
--   **👨‍🎓 사용자 관리**: JWT 및 AWS Cognito 기반의 안전한 인증 및 사용자 정보 관리
--   **📚 강좌 관리**: 강좌 생성, 조회, 수정 및 학생 등록 처리
--   **📝 과제 관리**: 과제 제출, 채점, 상세 피드백 기능
--   **📈 성적 관리**: 과제, 시험, 출석을 종합한 최종 성적 자동 산출 및 조회
--   **⏰ 출결 관리**: VOD 시청 기록을 기반으로 한 자동 출결 시스템
--   **📹 타임마크**: 동영상 강의의 특정 지점에 북마크와 메모를 남기는 기능
--   **🤖 AI 기능**: (추후 기능 추가 시 설명)
-
----
-
-## 🛠 기술 스택
+## 🛠️ 기술 스택
 
 | 구분             | 기술                               | 설명                                                                   |
 | :--------------- | :--------------------------------- | :--------------------------------------------------------------------- |
@@ -49,37 +86,53 @@ Nation's Lab LMS 프로젝트의 백엔드 서버입니다. Express.js를 기반
 | **Authentication** | `JWT`, `AWS Cognito`             | 사용자 인증 및 권한 부여                                               |
 | **Deployment**   | `Docker`, `AWS ECS`, `AWS Fargate` | 컨테이너 기반의 서버리스 배포 및 운영                                  |
 | **Storage**      | `AWS S3`                           | 강의 자료, 과제 제출 파일 등 정적 에셋 저장                            |
-| **Logging**      | `Morgan`, `Winston`                | 요청 로깅 및 에러 추적                                                 |
+| **Logging**      | `Morgan`, `Winston`, `CloudWatch`  | 요청 로깅 및 에러 추적                                                 |
 | **API Docs**     | `Swagger`                          | API 명세 자동 생성 및 테스트 UI 제공                                   |
 
 ---
 
-## 🏗 시스템 아키텍처
+## 🖥️ 코드 레벨 설명
 
-본 프로젝트는 AWS Fargate에서 실행되는 Docker 컨테이너 기반의 서버리스 백엔드 애플리케이션입니다.
+### 프로젝트 구조
 
-![Architecture Diagram](https://user-images.githubusercontent.com/42625893/189433626-d4468f30-5813-4e4b-84a1-12f5518b456d.png)
-*(위 다이어그램은 예시이며, 실제 아키텍처에 맞게 수정이 필요할 수 있습니다.)*
+```
+.
+├── .github/workflows/  # GitHub Actions CI/CD 워크플로우
+├── scripts/            # DB 마이그레이션 등 보조 스크립트
+├── src/
+│   ├── config/         # 데이터베이스, S3, Swagger 등 외부 서비스 연결 설정
+│   ├── db/             # 데이터베이스 마이그레이션 스크립트
+│   ├── middlewares/    # 인증(auth), 로깅(logger), 에러 처리(error) 등 미들웨어
+│   ├── routes/         # API 엔드포인트 정의 및 라우팅 로직
+│   │   └── admin/      # 관리자 전용 API 라우트
+│   ├── utils/          # S3 핸들러, 성적 계산기 등 재사용 가능한 유틸리티 함수
+│   └── server.js       # 애플리케이션의 메인 진입점 (Express 서버 설정)
+├── .dockerignore       # Docker 이미지 빌드 시 제외할 파일 목록
+├── .env.example        # 환경 변수 예시 파일
+├── Dockerfile          # 애플리케이션의 Docker 이미지 생성 명세
+├── package.json        # 프로젝트 의존성 및 스크립트 정의
+└── task-definition.json # ECS 작업 정의의 기본 템플릿
+```
 
-#### 주요 서비스 역할:
+### 데이터베이스 스키마
 
--   **Amazon ECR (Elastic Container Registry)**: 빌드된 Docker 이미지를 안전하게 저장하고 관리하는 프라이빗 레지스트리입니다.
--   **Amazon ECS (Elastic Container Service) & Fargate**: 컨테이너화된 애플리케이션을 서버리스 환경에서 배포하고 운영합니다. Fargate를 통해 서버 인프라를 직접 관리할 필요 없이 컨테이너 실행에만 집중할 수 있습니다.
--   **Amazon RDS (Relational Database Service)**: PostgreSQL 데이터베이스를 안정적으로 운영 및 관리합니다.
--   **Amazon S3 (Simple Storage Service)**: 강의 자료, 과제 제출 파일, 이미지 등 모든 정적 파일을 저장하는 확장 가능한 스토리지입니다.
--   **Amazon DynamoDB**: 빠른 응답 속도가 필요한 비정형 데이터(예: 타임마크, 로그)를 저장하는 NoSQL 데이터베이스입니다.
--   **Amazon ElastiCache**: Redis를 호스팅하여 세션 정보나 자주 조회되는 데이터를 캐싱하여 API 응답 시간을 단축합니다.
+데이터베이스는 기능별로 스키마가 분리되어 관리됩니다.
+
+-   **`auth_schema`**: 사용자 정보, 역할 등 인증 관련 데이터
+-   **`course_schema`**: 강좌 정보, 목차 등 강좌 관련 데이터
+-   **`enrollment_schema`**: 학생의 수강 신청 정보 및 학습 진행률
+-   **`grade_schema`**: 과제, 시험, 출결 등 성적 관련 데이터
+-   **`review_schema`**: 강의 후기 및 평점 데이터
 
 ---
 
-## 🚀 시작하기
+## 🚀 로컬에서 시작하기
 
 ### 사전 준비
 
--   [Node.js](https://nodejs.org/) (v18.x 이상 권장)
--   [pnpm](https://pnpm.io/installation) (프로젝트의 패키지 매니저)
+-   [Node.js](https://nodejs.org/) (v18.x 이상)
+-   [NPM](https://www.npmjs.com/) (Node.js 설치 시 자동 설치)
 -   [Docker](https://www.docker.com/)
--   [AWS CLI](https://aws.amazon.com/cli/) (선택 사항, 로컬에서 AWS 리소스와 상호작용 시 필요)
 
 ### 설치 및 실행
 
@@ -91,7 +144,7 @@ Nation's Lab LMS 프로젝트의 백엔드 서버입니다. Express.js를 기반
 
 2.  **의존성 설치:**
     ```bash
-    pnpm install
+    npm install
     ```
 
 3.  **.env 파일 설정:**
@@ -99,25 +152,74 @@ Nation's Lab LMS 프로젝트의 백엔드 서버입니다. Express.js를 기반
 
 4.  **개발 서버 실행:**
     ```bash
-    pnpm dev
+    npm run dev
     ```
-    서버는 `http://localhost:3000`에서 실행되며, 파일 변경 시 자동으로 재시작됩니다.
+    서버는 `http://localhost:3000`에서 실행되며, 파일 변경 시 [nodemon](https://nodemon.io/)에 의해 자동으로 재시작됩니다.
+
+---
+
+## 🚢 인프라 레벨 설명 (배포)
+
+### 핵심 원칙: Git Push = Deploy
+
+이 프로젝트는 GitHub Flow를 기반으로 한 완전 자동화된 CI/CD 파이프라인이 구축되어 있습니다. 개발자는 배포 과정 자체에 개입할 필요 없이, Git 브랜치 전략에 따라 작업하기만 하면 됩니다. **배포를 위해 GitHub Actions 워크플로우를 수정하거나, AWS 자격 증명을 별도로 설정할 필요가 없습니다.**
+
+-   **`main` 브랜치에 Push 또는 Merge**가 발생하면, 변경사항은 자동으로 **프로덕션 서버**에 배포됩니다.
+
+### CI/CD 파이프라인 상세
+
+배포는 `.github/workflows/deploy.yml`에 정의된 GitHub Actions 워크플로우에 의해 진행됩니다.
+
+1.  **`Configure AWS credentials`**: GitHub Secrets에 저장된 AWS 자격 증명을 사용하여, GitHub Actions 러너가 AWS 리소스(ECR, ECS)에 접근할 수 있도록 인증합니다. 이 자격 증명은 **오직 배포 과정에서만** 사용됩니다.
+2.  **`Build, tag, and push image to Amazon ECR`**: `Dockerfile`을 기반으로 최신 소스코드가 포함된 Docker 이미지를 빌드하고, AWS ECR(Elastic Container Registry)에 푸시합니다.
+3.  **`Fill in the new image ID in the Amazon ECS task definition`**: `task-definition.json` 파일을 템플릿으로 사용하여, ECR에 푸시된 새 이미지의 주소를 포함한 새로운 ECS 작업 정의(Task Definition)를 생성합니다.
+4.  **`Deploy Amazon ECS task definition`**: 새로 생성된 작업 정의를 사용하여 ECS 서비스를 업데이트합니다. ECS는 이 새로운 설계도를 보고, 이전 버전의 컨테이너를 새로운 버전의 컨테이너로 교체하는 롤링 업데이트를 진행하여 무중단 배포를 완료합니다.
+
+### 주요 AWS 서비스 역할
+
+-   **ECR (Elastic Container Registry)**: 빌드된 Docker 이미지를 안전하게 저장하는 프라이빗 레지스트리입니다.
+-   **ECS (Elastic Container Service) & Fargate**: 컨테이너화된 애플리케이션을 서버리스 환경에서 배포하고 운영합니다. Fargate를 통해 서버 인프라를 직접 관리할 필요 없이 컨테이너 실행에만 집중할 수 있습니다.
+-   **RDS (PostgreSQL)**: 메인 데이터베이스를 안정적으로 운영 및 관리합니다.
+-   **S3**: 강의 자료, 과제 제출 파일, 이미지 등 모든 정적 파일을 저장하는 확장 가능한 스토리지입니다.
+-   **DynamoDB**: 빠른 응답 속도가 필요한 비정형 데이터(예: 타임마크)를 저장하는 NoSQL 데이터베이스입니다.
+
+### IAM 역할의 이해: `Task Role` vs `Execution Role`
+
+ECS는 두 가지 중요한 IAM 역할을 사용하며, 이를 구분하는 것이 매우 중요합니다.
+
+-   **`taskRoleArn` (작업 역할)**: **애플리케이션(컨테이너 내부)이 다른 AWS 서비스에 접근할 때 사용하는 권한**입니다. 예를 들어, Express 서버가 S3에 파일을 업로드하거나 DynamoDB에서 데이터를 읽을 때 이 역할의 권한을 사용합니다. **모든 AWS 서비스 접근 권한은 여기에 부여해야 합니다.**
+-   **`executionRoleArn` (실행 역할)**: **ECS 에이전트 자체가 컨테이너를 실행하기 위해 필요한 권한**입니다. ECR에서 Docker 이미지를 PULL 해오거나, CloudWatch에 로그를 전송하는 등의 역할을 수행합니다. 애플리케이션의 로직과는 직접적인 관련이 없습니다.
+
+> **⚠️ 중요**: 프로덕션 환경에서는 보안을 위해 **절대로** AWS Access Key를 환경 변수로 주입해서는 안 됩니다. 모든 권한은 `Task Role`을 통해 관리되어야 합니다.
+
+---
+
+## 🔗 API 문서 (Swagger)
+
+모든 API는 Swagger를 통해 문서화되어 있습니다. 각 엔드포인트의 상세 명세(요청, 응답, 스키마 등)를 확인하고 직접 테스트할 수 있습니다.
+
+-   **운영 서버 API 문서:** `http://<ALB_DNS_NAME>/api-docs`
+-   **로컬 서버 API 문서:** `http://localhost:3000/api-docs`
 
 ---
 
 ## ⚙️ 환경 변수
 
-애플리케이션 실행에 필요한 환경 변수입니다. `.env` 파일에 설정해주세요.
+애플리케이션 실행에 필요한 환경 변수입니다. 로컬 개발 시 `.env` 파일에 설정해주세요.
 
 ```dotenv
 # Server Configuration
 PORT=3000
-API_BASE_URL=http://lms-alb-599601140.ap-northeast-2.elb.amazonaws.com # 배포된 서버의 기본 URL
 
-# AWS Credentials (로컬 개발 시 필요)
+# AWS Credentials (로컬 개발 시에만 필요)
+# 프로덕션(ECS)에서는 IAM 역할을 사용하므로 절대 설정하지 않습니다.
 AWS_REGION=ap-northeast-2
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
+# VITE_ 접두사는 프론트엔드 빌드 시 변수를 주입하기 위함입니다.
+VITE_AWS_REGION=${AWS_REGION}
+VITE_AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+VITE_AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 
 # Database (PostgreSQL - Amazon RDS)
 DB_HOST=...
@@ -127,84 +229,9 @@ DB_PASSWORD=...
 DB_NAME=lms_db
 
 # AWS Cognito for JWT Authentication
-COGNITO_JWKS_URL=https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_RWIv2Yp2f/.well-known/jwks.json
+COGNITO_JWKS_URL=...
 
 # Redis (Amazon ElastiCache)
 ELASTICACHE_HOST=...
 ELASTICACHE_PORT=6379
 ```
-
----
-
-## 🔗 API 문서 (Swagger)
-
-모든 API는 Swagger를 통해 문서화되어 있습니다. 각 엔드포인트의 상세 명세(요청, 응답, 스키마 등)를 확인하고 직접 테스트할 수 있습니다.
-
--   **운영 서버 API 문서:** [http://lms-alb-599601140.ap-northeast-2.elb.amazonaws.com/api-docs](http://lms-alb-599601140.ap-northeast-2.elb.amazonaws.com/api-docs)
--   **로컬 서버 API 문서:** 개발 서버 실행 후 [http://localhost:3000/api-docs](http://localhost:3000/api-docs)로 접속
-
----
-
-## 🚢 배포 (CI/CD)
-
-### 개발자 워크플로우 가이드
-
-> **✅ 핵심: Git 브랜치에 Push하면 배포는 자동입니다.**
->
-> 이 프로젝트는 GitHub Flow를 기반으로 한 완전 자동화된 CI/CD 파이프라인이 구축되어 있습니다. 개발자는 배포 과정 자체에 개입할 필요 없이, Git 브랜치 전략에 따라 작업하기만 하면 됩니다. **배포를 위해 GitHub Actions 워크플로우(`.github/workflows/*.yml`)를 수정하거나, AWS 자격 증명을 별도로 설정할 필요가 없습니다.**
->
-> 1.  **브랜치 생성**: 새로운 기능 개발이나 버그 수정 시, `main` 브랜치에서 새로운 브랜치를 생성합니다. (예: `feature/new-api`, `fix/login-bug`)
-> 2.  **개발 및 Push**: 코드를 수정한 후, 자신의 브랜치에 커밋하고 Push합니다.
-> 3.  **테스트 서버 배포 (선택 사항)**: 특정 브랜치(예: `develop` 또는 `feature/*`)에 Push하면, 코드가 자동으로 **테스트 서버**에 배포될 수 있습니다. 이를 통해 `main` 브랜치에 병합하기 전에 변경사항을 안전하게 검증할 수 있습니다.
-> 4.  **Pull Request**: 개발이 완료되면 `main` 브랜치로 Pull Request(PR)를 생성합니다.
-> 5.  **프로덕션 배포**: PR이 승인되고 `main` 브랜치에 병합(Merge)되면, 변경사항은 자동으로 **프로덕션 서버**에 배포됩니다.
-
-### 배포 파이프라인
-
-1.  **Trigger**: `main` 또는 `develop` 등의 주요 브랜치에 Push 또는 Pull Request Merge 발생
-2.  **Build**: 소스코드를 기반으로 Docker 이미지를 빌드합니다.
-3.  **Push to ECR**: 빌드된 이미지를 AWS ECR(Elastic Container Registry)에 푸시합니다.
-4.  **Update ECS Task Definition**: ECR에 푸시된 새 이미지 정보를 담아 ECS 작업 정의(Task Definition)의 새 버전을 생성합니다.
-5.  **Deploy to ECS**: 업데이트된 작업 정의를 사용하여 해당 환경(테스트/프로덕션)의 ECS 서비스(Service)를 롤링 업데이트 방식으로 배포합니다. 이 과정에서 무중단 배포가 이루어집니다.
-
-### AWS 인프라 구성
-
-#### Amazon ECR (Elastic Container Registry)
-
--   **역할**: Docker 이미지를 저장, 관리, 배포하는 완전 관리형 컨테이너 레지스트리입니다.
--   **리포지토리 URI**: `471112588210.dkr.ecr.ap-northeast-2.amazonaws.com/lms-ecs`
-
-#### Amazon ECS (Elastic Container Service)
-
-ECS는 컨테이너 오케스트레이션 서비스로, 애플리케이션의 배포와 운영을 자동화합니다.
-
--   **클러스터**: `lms-ecs-cluster`
--   **실행 유형**: **AWS Fargate**를 사용하여 서버 관리가 필요 없는 서버리스 환경에서 컨테이너를 실행합니다.
-
-##### ECS 작업 정의 (Task Definition)
-
-애플리케이션 컨테이너를 어떻게 실행할지에 대한 명세서입니다. (`task-definition.json` 파일 참조)
-
--   **Family**: `lms-ecs-task`
--   **CPU / Memory**: 0.25 vCPU / 512 MiB
--   **네트워크 모드**: `awsvpc`
--   **실행 역할 (Execution Role)**: ECR에서 이미지를 가져오고 CloudWatch에 로그를 전송하는 권한을 가집니다.
--   **작업 역할 (Task Role)**: 컨테이너 내 애플리케이션이 S3, DynamoDB 등 다른 AWS 서비스에 접근할 수 있는 권한을 가집니다.
-
-##### ECS 서비스 (Service)
-
-지정된 수의 작업(컨테이너) 인스턴스를 클러스터에서 항상 실행하고 유지 관리합니다.
-
--   **서비스 이름**: `lms-service` (환경별로 접미사가 붙을 수 있음. 예: `lms-service-prod`, `lms-service-dev`)
--   **원하는 작업 수 (Desired Tasks)**: 2 (가용성을 위해 2개 이상 유지)
--   **배포 전략**: 롤링 업데이트 (무중단 배포)
-
-##### Fargate를 사용하는 이유
-
-| 항목              | ECS Fargate의 장점                                                     |
-| :---------------- | :--------------------------------------------------------------------- |
-| **서버 관리 불필요**  | OS 패치, 보안 업데이트 등 인프라 관리 부담이 없습니다.                 |
-| **자동 확장**       | 트래픽에 따라 컨테이너 수를 자동으로 조절하여 안정성과 비용 효율을 높입니다. |
-| **효율적인 과금**   | 사용한 vCPU, 메모리 자원에 대해서만 초 단위로 과금되어 경제적입니다.     |
-| **강화된 보안**     | 각 Task가 격리된 환경에서 실행되어 강력한 보안을 제공합니다.           |
-| **리소스 최적화**   | 필요한 만큼의 리소스를 정밀하게 할당하여 낭비를 최소화합니다.          |

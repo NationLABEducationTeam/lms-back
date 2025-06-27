@@ -483,19 +483,6 @@ router.get('/my/progress', verifyToken, requireRole(['STUDENT']), async (req, re
  *         description: Permission denied.
  */
 router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
-    console.log("--- DEBUG START: /enrolled/:studentId ---");
-    console.log("Current AWS_ACCESS_KEY_ID:", process.env.AWS_ACCESS_KEY_ID);
-    console.log("Current AWS_SECRET_ACCESS_KEY:", process.env.AWS_SECRET_ACCESS_KEY ? "Exists" : "Not Found");
-    console.log("Current AWS_REGION:", process.env.AWS_REGION);
-    try {
-        const s3Credentials = await s3Client.config.credentials();
-        console.log("S3 Client Credentials Source:", s3Credentials.credentialScope);
-        console.log("S3 Client Access Key ID:", s3Credentials.accessKeyId);
-    } catch (e) {
-        console.log("Could not get S3 client credentials:", e.message);
-    }
-    console.log("--- DEBUG END ---");
-
     try {
         const { studentId } = req.params;
         
@@ -593,10 +580,26 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching enrolled courses:', error);
+
+        const debugInfo = {
+            env_aws_access_key_id: process.env.AWS_ACCESS_KEY_ID || "Not set",
+            env_aws_secret_access_key: process.env.AWS_SECRET_ACCESS_KEY ? "Exists" : "Not set",
+            env_aws_region: process.env.AWS_REGION || "Not set"
+        };
+
+        try {
+            const s3Credentials = await s3Client.config.credentials();
+            debugInfo.s3_credentials_source = s3Credentials.credentialScope || "N/A";
+            debugInfo.s3_access_key_id = s3Credentials.accessKeyId;
+        } catch (credError) {
+            debugInfo.s3_credentials_error = credError.message;
+        }
+
         res.status(500).json({
             success: false,
             message: 'Failed to fetch enrolled courses',
-            error: error.message
+            error: error.message,
+            debug: debugInfo
         });
     }
 });

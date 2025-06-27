@@ -1,6 +1,12 @@
 const AWS = require('aws-sdk');
 const { v4: uuidv4 } = require('uuid');
 
+// In production, force removal of any credential env vars to ensure IAM Role is used.
+if (process.env.NODE_ENV === 'production') {
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.AWS_SECRET_ACCESS_KEY;
+}
+
 // AWS 설정
 AWS.config.update({
     region: process.env.AWS_REGION || 'ap-northeast-2'

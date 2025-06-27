@@ -2,6 +2,12 @@ const { S3Client, ListObjectsV2Command, PutObjectCommand, CopyObjectCommand, Hea
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { transliterate } = require('transliteration');
 
+// In production, force removal of any credential env vars to ensure IAM Role is used.
+if (process.env.NODE_ENV === 'production') {
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.AWS_SECRET_ACCESS_KEY;
+}
+
 const s3Client = new S3Client({
     region: process.env.AWS_REGION || 'ap-northeast-2'
 });

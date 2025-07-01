@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
+const { getPool, SCHEMAS, TABLES } = require('../config/database');
 
 // Initialize the JWKS client
 const client = jwksClient({
@@ -35,6 +36,7 @@ const verifyToken = (req, res, next) => {
         if (err) {
             return res.status(401).json({ message: 'Invalid token' });
         }
+        console.log('[Debug] JWT Token decoded:', JSON.stringify(decoded, null, 2));
         req.user = decoded;
         next();
     });
@@ -51,6 +53,7 @@ const requireRole = (allowedRoles) => {
         const hasAllowedRole = allowedRoles.some(role => userGroups.includes(role));
 
         if (!hasAllowedRole) {
+            console.log(`[Auth] Permission Denied for user ${req.user.sub}. User groups: [${userGroups.join(', ')}], Required roles: [${allowedRoles.join(', ')}]`);
             return res.status(403).json({ message: 'Insufficient permissions' });
         }
 

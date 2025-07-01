@@ -69,7 +69,7 @@ router.get('/', verifyToken, requireRole(['ADMIN']), async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('Error fetching all users:', error);
+        console.error('Error fetching all users:', error, 'Requesting user roles:', req.user['cognito:groups']);
         res.status(500).json({
             success: false,
             message: 'Failed to fetch users',

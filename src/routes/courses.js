@@ -626,19 +626,10 @@ router.get('/enrolled/:studentId', verifyToken, async (req, res) => {
  *       '403':
  *         description: Permission denied.
  */
-router.get('/:courseId/students', verifyToken, async (req, res) => {
+router.get('/:courseId/students', verifyToken, requireRole(['ADMIN']), async (req, res) => {
     try {
         const { courseId } = req.params;
         
-        // Check if the user is the specified admin
-        const adminId = 'f4282d3c-7061-700d-e22e-e236e6288087';
-        if (req.user.sub !== adminId) {
-            return res.status(403).json({
-                success: false,
-                message: 'Access denied. Only authorized admin can access this resource.'
-            });
-        }
-
         const query = `
             SELECT 
                 u.cognito_user_id,
@@ -685,17 +676,8 @@ router.get('/:courseId/students', verifyToken, async (req, res) => {
 });
 
 // Get all student enrollments (Admin only) - Using Read Replica
-router.get('/admin/enrollments/all', verifyToken, async (req, res) => {
+router.get('/admin/enrollments/all', verifyToken, requireRole(['ADMIN', 'INSTRUCTOR']), async (req, res) => {
     try {
-        // TODO: 관리자의 경우 극소수이기 때문에 나중에는 하드 코딩 또는 환경변수로 저장 후 비교
-        const adminId = 'f4282d3c-7061-700d-e22e-e236e6288087';
-        if (req.user.sub !== adminId) {
-            return res.status(403).json({
-                success: false,
-                message: 'Access denied. Only authorized admin can access this resource.'
-            });
-        }
-
         const pool = getPool('read');
         const query = `
             SELECT 

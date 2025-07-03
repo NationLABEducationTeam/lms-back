@@ -1,25 +1,27 @@
 const AWS = require('aws-sdk');
 
-// 프로덕션에서는 자격 증명 환경 변수를 강제로 삭제하여 IAM 역할 사용
-if (process.env.NODE_ENV === 'production' || process.env.ECS_CONTAINER_METADATA_URI) {
-    delete process.env.AWS_ACCESS_KEY_ID;
-    delete process.env.AWS_SECRET_ACCESS_KEY;
-    console.log('🔐 [DynamoDB] 프로덕션/ECS 환경 - IAM 역할 사용 강제');
-}
-
 // AWS 설정 로깅
 console.log('🔧 [DynamoDB] AWS 설정 정보:', {
     region: process.env.AWS_REGION,
     hasAccessKeyId: !!process.env.AWS_ACCESS_KEY_ID,
-    hasSecretAccessKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-    isECS: !!process.env.ECS_CONTAINER_METADATA_URI
+    hasSecretAccessKey: !!process.env.AWS_SECRET_ACCESS_KEY
 });
 
-// AWS 설정 - S3처럼 region만 설정하면 SDK가 자동으로 자격 증명 처리
-// ECS에서는 IAM 역할, 로컬에서는 환경 변수 자동 사용
-AWS.config.update({
+// AWS 설정 - ECS/EC2에서는 IAM 역할 사용, 로컬에서는 환경 변수 사용
+const awsConfig = {
     region: process.env.AWS_REGION || 'ap-northeast-2'
-});
+};
+
+// 환경 변수가 있을 때만 자격 증명 추가
+if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+    awsConfig.accessKeyId = process.env.AWS_ACCESS_KEY_ID;
+    awsConfig.secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+    console.log('🔑 [DynamoDB] 환경 변수에서 AWS 자격 증명 사용');
+} else {
+    console.log('🔐 [DynamoDB] IAM 역할 기반 자격 증명 사용 (ECS/EC2)');
+}
+
+AWS.config.update(awsConfig);
 
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 

@@ -2,8 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { verifyToken, requireRole } = require('../../middlewares/auth');
 const { masterPool, getPool, SCHEMAS, TABLES } = require('../../config/database');
-const dynamoDB = require('../../config/dynamodb');
+const AWS = require('aws-sdk');
 const { v4: uuidv4 } = require('uuid');
+
+// DynamoDB 클라이언트 설정 - S3처럼 region만 설정
+// ECS에서는 IAM 역할, 로컬에서는 환경 변수 자동 사용
+const dynamoDB = new AWS.DynamoDB.DocumentClient({
+    region: process.env.AWS_REGION || 'ap-northeast-2'
+});
 
 // 학생 노트 테이블 이름
 const STUDENT_NOTES_TABLE = 'LMS_StudentNotes';

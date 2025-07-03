@@ -4,14 +4,14 @@ const AWS = require('aws-sdk');
 console.log('🔧 [DynamoDB] AWS 설정 정보:', {
     region: process.env.AWS_REGION,
     hasAccessKeyId: !!process.env.AWS_ACCESS_KEY_ID,
-    hasSecretAccessKey: !!process.env.AWS_SECRET_ACCESS_KEY
+    hasSecretAccessKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+    isECS: !!process.env.ECS_CONTAINER_METADATA_URI
 });
 
-// AWS 설정
+// AWS 설정 - S3처럼 region만 설정하면 SDK가 자동으로 자격 증명 처리
+// ECS에서는 IAM 역할, 로컬에서는 환경 변수 자동 사용
 AWS.config.update({
-    region: process.env.AWS_REGION || 'ap-northeast-2',
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+    region: process.env.AWS_REGION || 'ap-northeast-2'
 });
 
 const dynamodb = new AWS.DynamoDB.DocumentClient();

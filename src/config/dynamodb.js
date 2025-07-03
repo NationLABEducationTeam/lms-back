@@ -1,5 +1,12 @@
 const AWS = require('aws-sdk');
 
+// 프로덕션에서는 자격 증명 환경 변수를 강제로 삭제하여 IAM 역할 사용
+if (process.env.NODE_ENV === 'production' || process.env.ECS_CONTAINER_METADATA_URI) {
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.AWS_SECRET_ACCESS_KEY;
+    console.log('🔐 [DynamoDB] 프로덕션/ECS 환경 - IAM 역할 사용 강제');
+}
+
 // AWS 설정 로깅
 console.log('🔧 [DynamoDB] AWS 설정 정보:', {
     region: process.env.AWS_REGION,
